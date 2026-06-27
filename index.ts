@@ -180,6 +180,29 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
     };
 
     return {
+        config: async (config: any) => {
+            config.agent = config.agent || {};
+            config.agent.Sentinel = {
+                mode: "subagent",
+                description: "Swarm Orchestrator & Supervisor. Manages task delegation, monitors heartbeats, evaluates handoffs, and audits final criteria.",
+                prompt: getFullAgentPrompt("Sentinel")
+            };
+            config.agent.Explorer = {
+                mode: "subagent",
+                description: "Read-Only Scout. Maps codebase architecture, identifies target files, and documents existing implementations.",
+                prompt: getFullAgentPrompt("Explorer")
+            };
+            config.agent.Coder = {
+                mode: "subagent",
+                description: "Primary implementation agent. Writes focused modifications and verifies local compilation.",
+                prompt: getFullAgentPrompt("Coder")
+            };
+            config.agent.Debugger = {
+                mode: "subagent",
+                description: "Log-driven diagnostic and repair agent. Summons when coder builds fail or test regressions occur.",
+                prompt: getFullAgentPrompt("Debugger")
+            };
+        },
         "command.execute.before": async (cmdInput: any, cmdOutput: any) => {
             const command = cmdInput.command;
             const args = cmdInput.arguments || "";
@@ -220,13 +243,15 @@ Development
                     // Start monitoring
                     startHeartbeatMonitor();
 
-                    // Inject the swarm instructions directly into the LLM context
+                    // Spawn the Sentinel agent natively using a subtask part
                     cmdOutput.parts.push({
                         id: "prt_" + Math.random().toString(36).substring(2),
                         sessionID: cmdInput.sessionID,
                         messageID: "msg_" + Math.random().toString(36).substring(2),
-                        type: "text",
-                        text: `${getFullAgentPrompt("Sentinel")}\n\n<user_request>\nA new swarm task has been defined. I have generated 'prompt_draft.md' in the workspace root. Spawn the Sentinel agent immediately to begin orchestrating this task based on the draft.\n</user_request>`
+                        type: "subtask",
+                        prompt: `A new swarm task has been defined. I have generated 'prompt_draft.md' in the workspace root. Begin orchestrating this task based on the draft.`,
+                        description: "Orchestrate harness swarm workflow",
+                        agent: "Sentinel"
                     });
 
                 } catch (error: any) {
