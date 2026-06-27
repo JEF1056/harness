@@ -2,15 +2,18 @@
   "command": {
     "harness": {
       "description": "Trigger the harness multi-agent swarm workflow",
-      "argumentHint": "[optional instructions]"
+      "argumentHint": "[optional instructions]",
+      "template": "/harness {{arguments}}"
     },
     "debug": {
       "description": "Automated log-driven debug and repair",
-      "argumentHint": "<target_id>"
+      "argumentHint": "<target_id>",
+      "template": "/debug {{arguments}}"
     },
     "plan": {
       "description": "Strategic artifact-driven planning mode",
-      "argumentHint": "<request>"
+      "argumentHint": "<request>",
+      "template": "/plan {{arguments}}"
     }
   }
 }
