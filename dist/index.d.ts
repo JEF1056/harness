@@ -1,2 +1,3 @@
-export declare function deactivateHeartbeat(): void;
-export declare function activate(context: any): void;
+import { Plugin } from "@opencode-ai/plugin";
+export declare const server: Plugin;
+export default server;

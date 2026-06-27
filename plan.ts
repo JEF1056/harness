@@ -1,7 +1,4 @@
-import * as opencode from '@williamcr01/opencode-tps';
-import * as path from 'path';
-
-const QWEN_OPTIMIZED_PLAN_PROMPT = `
+export const QWEN_OPTIMIZED_PLAN_PROMPT = `
 <role>Planner (Strategic Architect)</role>
 
 <instructions>
@@ -31,24 +28,3 @@ The output MUST be a valid Markdown document. Use clear headings, bullet points,
 5.  **Verification**: How to test that the implementation was successful.
 </plan_structure>
 `;
-
-export function activatePlan() {
-    opencode.commands.registerCommand('plan', async () => {
-        const originalRequest = await opencode.window.showInputBox({
-            prompt: "Enter the feature request or task to plan",
-            placeHolder: "e.g., Implement user authentication using JWT"
-        });
-
-        if (!originalRequest) return;
-
-        // Inject the prompt directly into the chat window
-        opencode.chat.sendMessage({
-            role: 'user',
-            content: {
-                overrideResponse: undefined, 
-                text: `${QWEN_OPTIMIZED_PLAN_PROMPT}\n\n<user_request>\n${originalRequest}\n</user_request>`,
-                isCommand: true
-            }
-        });
-    });
-}

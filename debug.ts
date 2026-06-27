@@ -1,7 +1,4 @@
-import * as opencode from '@williamcr01/opencode-tps';
-import * as path from 'path';
-
-const QWEN_OPTIMIZED_REPAIR_PROMPT = `
+export const QWEN_OPTIMIZED_REPAIR_PROMPT = `
 <role>Debugger (Log Analysis & Repair)</role>
 
 <instructions>
@@ -30,42 +27,13 @@ Output your analysis in a structured markdown format before making edits.
 </auto_repair_directives>
 `;
 
-export function activateDebug() {
-    opencode.commands.registerCommand('debug', async () => {
-        // ... (mock implementation for retrieving logs) ...
-        const diagnosticLogId = await opencode.window.showInputBox({
-            prompt: "Enter the diagnostic target (e.g., PR number, GitHub Run ID, or local file path)",
-            placeHolder: "PR:123 or GITHUB_RUN:456 or ./error.log"
-        });
-
-        if (!diagnosticLogId) return;
-
-        // Fetch logs (mocked for this prototype)
-        const target = await fetch_diagnostic_logs(diagnosticLogId);
-
-        // Inject the prompt and logs directly into the chat window
-        opencode.chat.sendMessage({
-            role: 'user',
-            content: {
-                overrideResponse: undefined, // Let the LLM handle it, but override the user prompt text.
-                text: `${QWEN_OPTIMIZED_REPAIR_PROMPT}\n\n<diagnostic_target>\n${target}\n</diagnostic_target>\n\nBegin Phase 1: Log Analysis.`,
-                isCommand: true
-            }
-        });
-    });
-}
-
-/**
- * Mock function to retrieve diagnostic logs based on a target ID.
- */
-async function fetch_diagnostic_logs(targetId: string): Promise<string> {
+export async function fetch_diagnostic_logs(targetId: string): Promise<string> {
     return new Promise((resolve) => {
         setTimeout(() => {
             if (targetId.startsWith('PR:') || targetId.startsWith('GITHUB_RUN:')) {
                 resolve(`[Mock Log for ${targetId}]\nError: Property 'foo' does not exist on type 'Bar'.\n  at src/index.ts:42:15\n\nAction Required: Fix the type error.`);
                 return;
             }
-            // Fallback instructing the agent to run locally
             resolve(`No remote logs found for '${targetId}'. Please fall back to running the standard local build/test commands (e.g., 'npm test' or 'npm run build') and read the standard output directly to analyze the failure.`);
         }, 1000);
     });

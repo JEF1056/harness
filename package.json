@@ -2,6 +2,7 @@
   "name": "@jef1056/opencode-harness",
   "version": "1.0.0",
   "description": "An OpenCode plugin that implements an AI agent swarm command (/harness).",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -11,7 +12,6 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -35,6 +35,6 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@williamcr01/opencode-tps": "^0.1.1"
+    "@opencode-ai/plugin": "^1.17.11"
   }
 }
