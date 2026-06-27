@@ -350,6 +350,23 @@ export function activate() {
     activatePlan();
 }
 
+export function config(cfg: any) {
+    if (!cfg.command) cfg.command = {};
+    cfg.command['harness'] = {
+        description: "Trigger the harness multi-agent swarm workflow",
+        argumentHint: "[optional instructions]"
+    };
+    cfg.command['debug'] = {
+        description: "Automated log-driven debug and repair",
+        argumentHint: "<target_id>"
+    };
+    cfg.command['plan'] = {
+        description: "Strategic artifact-driven planning mode",
+        argumentHint: "<request>"
+    };
+    return cfg;
+}
+
 export function deactivate() {
     if (livenessInterval) clearInterval(livenessInterval);
     if (progressInterval) clearInterval(progressInterval);
