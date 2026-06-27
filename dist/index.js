@@ -1,9 +1,44 @@
-import * as opencode from '@williamcr01/opencode-tps';
-import * as fs from 'fs';
-import * as path from 'path';
-
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.deactivateHeartbeat = deactivateHeartbeat;
+exports.activate = activate;
+const opencode = __importStar(require("@williamcr01/opencode-tps"));
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 // --- 1. Universal Swarm Mechanics ---
-
 const UNIVERSAL_SWARM_MECHANICS = `
 # Universal Swarm Mechanics
 
@@ -45,9 +80,7 @@ When you receive a task, you may be provided with specialized "skills" to assist
  5. *Conflict Resolution*: If multiple loaded skills conflict, the subagent prioritizes the first skill listed in its prompt and logs the conflict in \`BRIEFING.md\`.
  6. *Error Handling*: If a skill file is missing or unreadable, the subagent logs the error in its final \`handoff.md\` and proceeds with best judgment.
 `;
-
 // --- 3. Subagent Prompt Catalog ---
-
 const AGENT_PROMPTS = {
     "Sentinel": `
 <role>The Sentinel (Swarm Supervisor)</role>
@@ -125,67 +158,52 @@ You are summoned when a Coder fails or a CI pipeline breaks.
 </instructions>
 `
 };
-
-function getFullAgentPrompt(role: keyof typeof AGENT_PROMPTS): string {
+function getFullAgentPrompt(role) {
     return `${UNIVERSAL_SWARM_MECHANICS}\n\n${AGENT_PROMPTS[role]}`;
 }
-
 // --- 4. Subagent Spawning Logic ---
-
-async function spawnAgent(role: string, prompt: string) {
+async function spawnAgent(role, prompt) {
     const workspaceRoot = opencode.workspace.rootPath || process.cwd();
     const agentsDir = path.join(workspaceRoot, '.agents');
     const agentId = Math.random().toString(36).substring(7);
     const agentDir = path.join(agentsDir, `${role.toLowerCase()}_${agentId}`);
     const sessionId = `swarm_${Date.now()}`;
-
     try {
-        
         if (!fs.existsSync(agentDir)) {
             fs.mkdirSync(agentDir, { recursive: true });
         }
-
         // Initialize BRIEFING.md and progress.md
         fs.writeFileSync(path.join(agentDir, 'BRIEFING.md'), `# BRIEFING\n\n## 🔒 My Identity\nRole: ${role}\nID: ${agentId}\n\n## 🔒 Key Constraints\nSee Universal Mechanics.\n\n## 🔒 My Workflow\nTask: ${prompt}\n`);
         fs.writeFileSync(path.join(agentDir, 'progress.md'), `# Progress\nLast visited: ${new Date().toISOString()}\nStatus: Initializing\n`);
-
-        const systemPrompt = getFullAgentPrompt(role as keyof typeof AGENT_PROMPTS);
-
+        const systemPrompt = getFullAgentPrompt(role);
         console.log(`[SWARM] Spawning ${role} (ID: ${agentId}) in ${agentDir}`);
         console.log(`[SWARM] Prompt length: ${systemPrompt.length} chars`);
-        
         return `Successfully spawned ${role} (ID: ${agentId}). Session ID: ${sessionId}. Workspace: ${agentDir}`;
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error(`[SWARM] Failed to spawn agent ${role}: `, error);
         throw error;
     }
 }
-
 // --- 5. Heartbeat Monitor ---
-
-let heartbeatInterval: NodeJS.Timeout | null = null;
-
+let heartbeatInterval = null;
 function startHeartbeatMonitor() {
-    if (heartbeatInterval) return;
-
+    if (heartbeatInterval)
+        return;
     const workspaceRoot = opencode.workspace.rootPath || process.cwd();
     const agentsDir = path.join(workspaceRoot, '.agents');
-
     heartbeatInterval = setInterval(() => {
-        if (!fs.existsSync(agentsDir)) return;
-
+        if (!fs.existsSync(agentsDir))
+            return;
         const agents = fs.readdirSync(agentsDir);
         for (const agent of agents) {
             const progressPath = path.join(agentsDir, agent, 'progress.md');
             if (fs.existsSync(progressPath)) {
                 const content = fs.readFileSync(progressPath, 'utf8');
                 const lastVisitedMatch = content.match(/Last visited: (.+)/);
-                
                 if (lastVisitedMatch && lastVisitedMatch[1]) {
                     const lastVisited = new Date(lastVisitedMatch[1]).getTime();
                     const now = Date.now();
-                    
                     if (now - lastVisited > 300000) {
                         opencode.window.showWarningMessage(`[Sentinel] Agent ${agent} appears stalled! Last heartbeat was over 5 minutes ago.`);
                     }
@@ -194,50 +212,42 @@ function startHeartbeatMonitor() {
         }
     }, 60000);
 }
-
-export function deactivateHeartbeat() {
+function deactivateHeartbeat() {
     if (heartbeatInterval) {
         clearInterval(heartbeatInterval);
         heartbeatInterval = null;
     }
 }
-
 // --- 6. Command Registration & Questionnaire ---
-
-export function activate(context: any) {
+function activate(context) {
     opencode.commands.registerCommand('teamwork', async () => {
         const state = {
             step: 0,
-            answers: [] as string[],
+            answers: [],
             initialRequest: ''
         };
-
         const steps = [
             "What is the primary objective of this swarm task?",
             "What are the acceptance criteria? (How will we know it is done?)",
             "Are there any specific files, folders, or architectural boundaries the swarm must NOT touch?",
             "What is the Integrity Mode? (Development, Demo, Benchmark)"
         ];
-
         for (let i = 0; i < steps.length; i++) {
             const answer = await opencode.window.showInputBox({
                 prompt: `Step ${i + 1}/${steps.length}: ${steps[i]}`,
                 ignoreFocusOut: true
             });
-            
             if (answer === undefined) {
-                 opencode.window.showInformationMessage("Swarm initialization aborted.");
-                 return; 
+                opencode.window.showInformationMessage("Swarm initialization aborted.");
+                return;
             }
-            if (i === 0) state.initialRequest = answer;
+            if (i === 0)
+                state.initialRequest = answer;
             state.answers.push(answer);
         }
-
         const workspaceRoot = opencode.workspace.rootPath || process.cwd();
-        
         try {
-            const initialReq = (state as any).initialRequest ? `\n## Initial Request\n${(state as any).initialRequest}\n` : '';
-            
+            const initialReq = state.initialRequest ? `\n## Initial Request\n${state.initialRequest}\n` : '';
             const draftContent = `# Harness Prompt Draft
 ${initialReq}
 ## 1. Primary Objective
@@ -254,9 +264,7 @@ ${state.answers[3]}
 `;
             const draftPath = path.join(workspaceRoot, 'prompt_draft.md');
             fs.writeFileSync(draftPath, draftContent, 'utf8');
-
             startHeartbeatMonitor();
-            
             opencode.chat.sendMessage({
                 role: 'user',
                 content: {
@@ -265,8 +273,8 @@ ${state.answers[3]}
                     isCommand: true
                 }
             });
-
-        } catch (error: any) {
+        }
+        catch (error) {
             opencode.window.showErrorMessage(`Failed to initialize swarm: ${error.message}`);
         }
     });

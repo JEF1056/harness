@@ -1,9 +1,17 @@
 {
-  "name": "opencode-harness",
+  "name": "@jef1056/opencode-harness",
   "version": "1.0.0",
   "description": "An OpenCode plugin that implements an AI agent swarm command (/harness).",
-  "main": "index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "opencode.json",
+    "assets"
+  ],
   "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -16,10 +24,17 @@
     "swarm",
     "agents"
   ],
-  "author": "",
+  "author": "JEF1056",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/JEF1056/harness/issues"
   },
-  "homepage": "https://github.com/JEF1056/harness#readme"
+  "homepage": "https://github.com/JEF1056/harness#readme",
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@williamcr01/opencode-tps": "^0.1.1"
+  }
 }
