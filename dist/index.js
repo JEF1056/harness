@@ -307,7 +307,7 @@ export const server = async (input, options) => {
         config: async (config) => {
             config.agent = config.agent || {};
             config.agent.Sentinel = config.agent.sentinel = {
-                mode: "subagent",
+                mode: "all",
                 description: "Swarm Orchestrator & Supervisor. Manages task delegation, monitors heartbeats, evaluates handoffs, and audits final criteria.",
                 prompt: getFullAgentPrompt("Sentinel"),
                 tools: {
@@ -329,7 +329,7 @@ export const server = async (input, options) => {
                 description: "Log-driven diagnostic and repair agent. Summons when coder builds fail or test regressions occur.",
                 prompt: getFullAgentPrompt("Debugger")
             };
-            // Automatically enable the task tool for any agent acting as an orchestrator, supervisor, or sentinel
+            // Automatically enable the task tool and set mode to 'all' for any agent acting as an orchestrator, supervisor, or sentinel
             for (const name of Object.keys(config.agent)) {
                 const agent = config.agent[name];
                 if (!agent)
@@ -340,6 +340,7 @@ export const server = async (input, options) => {
                     desc.includes("orchestrator") || desc.includes("sentinel") || desc.includes("supervisor")) {
                     agent.tools = agent.tools || {};
                     agent.tools.task = true;
+                    agent.mode = "all";
                 }
             }
         },
