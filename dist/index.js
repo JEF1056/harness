@@ -289,7 +289,10 @@ export const server = async (input, options) => {
             config.agent.Sentinel = {
                 mode: "subagent",
                 description: "Swarm Orchestrator & Supervisor. Manages task delegation, monitors heartbeats, evaluates handoffs, and audits final criteria.",
-                prompt: getFullAgentPrompt("Sentinel")
+                prompt: getFullAgentPrompt("Sentinel"),
+                tools: {
+                    task: true
+                }
             };
             config.agent.Explorer = {
                 mode: "subagent",
