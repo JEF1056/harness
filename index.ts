@@ -45,7 +45,18 @@ Never communicate via raw chat dumps. When you finish a task, write a \`handoff.
   3. Skip
   4. Redistribute
   5. Degrade
-`;
+
+### 2.6 Dynamic Skill Loading
+To allow generic subagents (like Workers or Critics) to act as domain-specific specialists, the swarm uses a dynamic skill-loading mechanism:
+- **Skill Injection**: The Orchestrator includes paths to one or more markdown skill files (\`SKILL.md\` format) in the subagent's dispatch prompt.
+- **Loading Protocol**:
+ 1. *Local Copying*: The subagent must immediately copy the skill markdown file into its isolated directory (e.g., \`.agents/<agent_folder>/skill_[name].md\`).
+ 2. *Registration*: The subagent records the loaded skill in its \`BRIEFING.md\` under a \`## Loaded Skills\` section, including the source path, local copy path, and a one-line summary of the methodology.
+ 3. *Execution*: The subagent reads the local copy and treats the loaded skill as its primary guidelines.
+ 4. *Context Recovery*: If truncated, the subagent recovers its state by re-reading the local copies rather than fetching from the original paths.
+ 5. *Conflict Resolution*: If multiple loaded skills conflict, the subagent prioritizes the first skill listed in its prompt and logs the conflict in \`BRIEFING.md\`.
+ 6. *Error Handling*: If a skill file is missing or unreadable, the subagent logs the error in its final \`handoff.md\` and proceeds with best judgment.
+\`;
 
 // --- 3. Subagent Prompt Catalog ---
 
@@ -89,6 +100,7 @@ const AGENT_PROMPTS = {
     "Armed Worker": `
 <role>Armed Worker (Execution Unit)</role>
 <instructions>
+<step>Load and prioritize external domain-specific skills according to the **Dynamic Skill Loading** protocol (Section 2.6).</step>
 <step>Implement changes based on the upstream Explorer's analysis, but ALWAYS verify their claims first (Explorers can be wrong).</step>
 <constraint>Make minimal changes. Do not perform unrelated refactoring.</constraint>
 <step>Run build and test commands immediately after code modification.</step>
@@ -98,6 +110,7 @@ const AGENT_PROMPTS = {
     "Reviewer / Critic": `
 <role>Reviewer / Critic (Objective Assessor)</role>
 <instructions>
+<step>Load and prioritize external verification methodology skills according to the **Dynamic Skill Loading** protocol (Section 2.6).</step>
 <step>Review the Worker's code for Correctness, Logical Completeness, and Quality.</step>
 <step>Issue a clear verdict: APPROVE, REQUEST_CHANGES, or NEEDS_DISCUSSION.</step>
 <step>Adversarial Mindset: Actively look for failure modes, edge cases, and untested assumptions. What happens under resource pressure? Are dependencies reliable?</step>
@@ -106,6 +119,7 @@ const AGENT_PROMPTS = {
     "Empirical Challenger": `
 <role>Empirical Challenger (Tester / Bug Hunter)</role>
 <instructions>
+<step>Load and prioritize external testing skills according to the **Dynamic Skill Loading** protocol (Section 2.6).</step>
 <step>Find bugs by writing and executing tests, generators, oracles, and stress harnesses.</step>
 <step>Run the verification code yourself.</step>
 <constraint>Do NOT trust the Worker's claims. If you cannot reproduce a bug empirically, it does not count.</constraint>
@@ -114,6 +128,7 @@ const AGENT_PROMPTS = {
     "Forensic Auditor": `
 <role>Forensic Auditor (Anti-Cheating Enforcer)</role>
 <instructions>
+<step>Load and prioritize external audit and validation skills according to the **Dynamic Skill Loading** protocol (Section 2.6).</step>
 <step>Verify that a work product implements its functionality authentically.</step>
 <step>Check against the user's requested Integrity Mode (Development, Demo, or Benchmark).</step>
 <step>Execute a 2-Phase investigation:
@@ -127,6 +142,7 @@ const AGENT_PROMPTS = {
 <role>Victory Auditor (Final Gatekeeper)</role>
 <instructions>
 <constraint>You share NO context with the implementation team. Trust nothing on disk.</constraint>
+<step>Load and prioritize external victory validation skills according to the **Dynamic Skill Loading** protocol (Section 2.6).</step>
 <step>Phase A (Timeline): Read logs and check for fabricated history or implausible timestamps.</step>
 <step>Phase B (Integrity): Re-run all Forensic Auditor checks.</step>
 <step>Phase C (Independent Test): Identify the project's canonical test command and execute it yourself. Compare your result with the team's claimed score.</step>
