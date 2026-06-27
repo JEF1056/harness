@@ -306,7 +306,7 @@ export const server = async (input, options) => {
         },
         config: async (config) => {
             config.agent = config.agent || {};
-            config.agent.Sentinel = {
+            config.agent.Sentinel = config.agent.sentinel = {
                 mode: "subagent",
                 description: "Swarm Orchestrator & Supervisor. Manages task delegation, monitors heartbeats, evaluates handoffs, and audits final criteria.",
                 prompt: getFullAgentPrompt("Sentinel"),
@@ -314,17 +314,17 @@ export const server = async (input, options) => {
                     task: true
                 }
             };
-            config.agent.Explorer = {
+            config.agent.Explorer = config.agent.explorer = {
                 mode: "subagent",
                 description: "Read-Only Scout. Maps codebase architecture, identifies target files, and documents existing implementations.",
                 prompt: getFullAgentPrompt("Explorer")
             };
-            config.agent.Coder = {
+            config.agent.Coder = config.agent.coder = {
                 mode: "subagent",
                 description: "Primary implementation agent. Writes focused modifications and verifies local compilation.",
                 prompt: getFullAgentPrompt("Coder")
             };
-            config.agent.Debugger = {
+            config.agent.Debugger = config.agent.debugger = {
                 mode: "subagent",
                 description: "Log-driven diagnostic and repair agent. Summons when coder builds fail or test regressions occur.",
                 prompt: getFullAgentPrompt("Debugger")
