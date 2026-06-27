@@ -149,22 +149,35 @@ export const server = async (input, options) => {
     const agentsDir = path.join(workspaceRoot, '.agents');
     const activeWatchers = new Map();
     let rootWatcher = null;
+    let heartbeatInterval = null;
     // Start heartbeat monitor if needed
     const startHeartbeatMonitor = () => {
-        setInterval(() => {
+        if (heartbeatInterval)
+            return;
+        heartbeatInterval = setInterval(() => {
             if (!fs.existsSync(agentsDir))
                 return;
             const agents = fs.readdirSync(agentsDir);
             for (const agent of agents) {
+                if (agent === 'sentinel_init')
+                    continue; // Skip initialization bootstrap folder
                 const progressPath = path.join(agentsDir, agent, 'progress.md');
                 if (fs.existsSync(progressPath)) {
                     const content = fs.readFileSync(progressPath, 'utf8');
+                    // If status is completed or cancelled/failed, skip warning
+                    const statusMatch = content.match(/Status:\s*(.+)/i);
+                    if (statusMatch && statusMatch[1]) {
+                        const status = statusMatch[1].trim().toLowerCase();
+                        if (status === 'completed' || status === 'cancelled' || status === 'failed' || status === 'finished') {
+                            continue;
+                        }
+                    }
                     const lastVisitedMatch = content.match(/Last visited: (.+)/);
                     if (lastVisitedMatch && lastVisitedMatch[1]) {
                         const lastVisited = new Date(lastVisitedMatch[1]).getTime();
                         const now = Date.now();
                         if (now - lastVisited > 300000) {
-                            console.warn(`[Sentinel] Agent ${agent} appears stalled! Last heartbeat was over 5 minutes ago.`);
+                            showSwarmToast(agent, "Appears stalled! Last heartbeat was over 5 minutes ago.", "warning");
                         }
                     }
                 }
@@ -285,6 +298,11 @@ export const server = async (input, options) => {
                 watcher.close();
             }
             activeWatchers.clear();
+            // Clear heartbeat interval
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
         },
         config: async (config) => {
             config.agent = config.agent || {};
