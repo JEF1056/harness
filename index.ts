@@ -338,12 +338,16 @@ opencode.experimental.chat.messages.transform((message: any, session: any) => {
     return message;
 });
 
+import { activateDebug, deactivateDebug } from './debug';
+
 // Initialize plugin
 export function activate() {
     console.log("Harness Teamwork plugin activated.");
+    activateDebug();
 }
 
 export function deactivate() {
     if (livenessInterval) clearInterval(livenessInterval);
     if (progressInterval) clearInterval(progressInterval);
+    deactivateDebug();
 }

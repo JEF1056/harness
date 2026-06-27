@@ -10,6 +10,7 @@ It intercepts the command to coordinate a highly structured, multi-agent workflo
 - **Strict Swarm Mechanics**: Enforces workspace isolation (in `.agents/`), state persistence (`BRIEFING.md`, `progress.md`), and deterministic handoff protocols.
 - **Integrity Validation**: The Forensic and Victory Auditors actively monitor for cheating, hardcoded facades, and timeline fabrications, failing the task if violations are found.
 - **Qwen-Optimized**: Agent system prompts are heavily structured with XML tags to guide reasoning models (like Qwen 3.5/3.6) with strict constraints.
+- **Auto-Repair / Debugging**: Use the `/debug` command to automatically fetch CI/CD logs, analyze stack traces, and iteratively repair failures locally with strict scope containment.
 
 ## Installation
 
@@ -28,4 +29,4 @@ Add the plugin to your `opencode.json` file. OpenCode automatically installs rem
 
 ### Step 2: Restart OpenCode
 
-Restart OpenCode. The plugin loads automatically upon restart. Type `/harness` in your chat to begin.
+Restart OpenCode. The plugin loads automatically upon restart. Type `/harness` or `/debug <target>` in your chat to begin.
