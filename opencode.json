@@ -1,5 +1,0 @@
-{
-  "plugins": [
-    "./.opencode/plugins/harness.ts"
-  ]
-}

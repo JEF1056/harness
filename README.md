@@ -11,15 +11,21 @@ It intercepts the command to coordinate a highly structured, multi-agent workflo
 - **Integrity Validation**: The Forensic and Victory Auditors actively monitor for cheating, hardcoded facades, and timeline fabrications, failing the task if violations are found.
 - **Qwen-Optimized**: Agent system prompts are heavily structured with XML tags to guide reasoning models (like Qwen 3.5/3.6) with strict constraints.
 
-## Getting Started
+## Installation
 
-1. Place the plugin source in your `.opencode/plugins/` directory.
-2. Ensure it is registered in `opencode.json`:
-   ```json
-   {
-     "plugins": [
-       "./.opencode/plugins/harness.ts"
-     ]
-   }
-   ```
-3. Type `/harness` in your OpenCode chat to begin.
+### Prerequisites
+- [OpenCode](https://opencode.ai)
+
+### Step 1: Add to opencode.json
+
+Add the plugin to your `opencode.json` file. OpenCode automatically installs remote plugins at startup.
+
+```json
+{
+  "plugin": ["github:JEF1056/harness"]
+}
+```
+
+### Step 2: Restart OpenCode
+
+Restart OpenCode. The plugin loads automatically upon restart. Type `/harness` in your chat to begin.
