@@ -329,6 +329,19 @@ export const server = async (input, options) => {
                 description: "Log-driven diagnostic and repair agent. Summons when coder builds fail or test regressions occur.",
                 prompt: getFullAgentPrompt("Debugger")
             };
+            // Automatically enable the task tool for any agent acting as an orchestrator, supervisor, or sentinel
+            for (const name of Object.keys(config.agent)) {
+                const agent = config.agent[name];
+                if (!agent)
+                    continue;
+                const desc = (agent.description || "").toLowerCase();
+                const n = name.toLowerCase();
+                if (n.includes("orchestrator") || n.includes("sentinel") || n.includes("supervisor") ||
+                    desc.includes("orchestrator") || desc.includes("sentinel") || desc.includes("supervisor")) {
+                    agent.tools = agent.tools || {};
+                    agent.tools.task = true;
+                }
+            }
         },
         "command.execute.before": async (cmdInput, cmdOutput) => {
             const command = cmdInput.command;
