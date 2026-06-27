@@ -49,4 +49,4 @@ Add the plugin to your `opencode.json` file. OpenCode automatically installs rem
 
 ### Step 2: Restart OpenCode
 
-Restart OpenCode. The plugin loads automatically upon restart. Type `/harness`, `/debug <target>`, or `/plan <request>` in your chat to begin.
+Restart OpenCode. The plugin loads automatically upon restart. Type `/harness [optional instructions]`, `/debug <target>`, or `/plan <request>` in your chat to begin.

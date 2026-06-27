@@ -255,8 +255,9 @@ opencode.experimental.chat.messages.transform((message: any, session: any) => {
     const sessionId = session.id;
 
     // Check if user is invoking the command
-    if (message.text && message.text.trim() === '/harness' && !sessionStates[sessionId]) {
-        sessionStates[sessionId] = { step: 0, answers: [] };
+    if (message.text && message.text.startsWith('/harness') && !sessionStates[sessionId]) {
+        const initialInstructions = message.text.replace('/harness', '').trim();
+        sessionStates[sessionId] = { step: 0, answers: [], initialRequest: initialInstructions };
         
         // Return the first question
         return {
@@ -282,26 +283,27 @@ opencode.experimental.chat.messages.transform((message: any, session: any) => {
         } else {
             // Questionnaire complete
             const answers = state.answers;
+            const initialReq = (state as any).initialRequest ? `\n## Initial Request\n${(state as any).initialRequest}\n` : '';
             
             // Create prompt_draft.md
-            const draftContent = \`# Harness Prompt Draft
-
-## Project: \${answers[1]}
-## Objective: \${answers[2]}
+            const draftContent = `# Harness Prompt Draft
+${initialReq}
+## Project: ${answers[0]}
+## Objective: ${answers[1]}
 
 ### Technical Requirements
-\${answers[3]}
+${answers[2]}
 
 ### Stack Constraints
-\${answers[4]}
+${answers[3]}
 
 ### Acceptance Criteria
-1. \${answers[5]}
-2. \${answers[6]}
-3. \${answers[7]}
+1. ${answers[4]}
+2. ${answers[5]}
+3. ${answers[6]}
 
 ### Integrity Mode
-\${answers[8]}
+${answers[7]}
 \`;
             fs.writeFileSync(path.join(process.cwd(), 'prompt_draft.md'), draftContent);
 
