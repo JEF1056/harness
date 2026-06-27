@@ -222,9 +222,9 @@ Development
 
                     // Inject the swarm instructions directly into the LLM context
                     cmdOutput.parts.push({
-                        id: Math.random().toString(),
+                        id: "prt_" + Math.random().toString(36).substring(2),
                         sessionID: cmdInput.sessionID,
-                        messageID: "",
+                        messageID: "msg_" + Math.random().toString(36).substring(2),
                         type: "text",
                         text: `${getFullAgentPrompt("Sentinel")}\n\n<user_request>\nA new swarm task has been defined. I have generated 'prompt_draft.md' in the workspace root. Spawn the Sentinel agent immediately to begin orchestrating this task based on the draft.\n</user_request>`
                     });
@@ -232,27 +232,27 @@ Development
                 } catch (error: any) {
                     console.error("Failed to initialize harness swarm:", error);
                     cmdOutput.parts.push({
-                        id: Math.random().toString(),
+                        id: "prt_" + Math.random().toString(36).substring(2),
                         sessionID: cmdInput.sessionID,
-                        messageID: "",
+                        messageID: "msg_" + Math.random().toString(36).substring(2),
                         type: "text",
                         text: `Error initializing swarm: ${error.message}`
                     });
                 }
             } else if (command === "plan") {
                 cmdOutput.parts.push({
-                    id: Math.random().toString(),
+                    id: "prt_" + Math.random().toString(36).substring(2),
                     sessionID: cmdInput.sessionID,
-                    messageID: "",
+                    messageID: "msg_" + Math.random().toString(36).substring(2),
                     type: "text",
                     text: `${QWEN_OPTIMIZED_PLAN_PROMPT}\n\n<user_request>\n${args}\n</user_request>`
                 });
             } else if (command === "debug") {
                 const logs = await fetch_diagnostic_logs(args);
                 cmdOutput.parts.push({
-                    id: Math.random().toString(),
+                    id: "prt_" + Math.random().toString(36).substring(2),
                     sessionID: cmdInput.sessionID,
-                    messageID: "",
+                    messageID: "msg_" + Math.random().toString(36).substring(2),
                     type: "text",
                     text: `${QWEN_OPTIMIZED_REPAIR_PROMPT}\n\n<diagnostic_target>\nTarget ID: ${args}\nLogs:\n${logs}\n</diagnostic_target>\n\nBegin Phase 1: Log Analysis.`
                 });
