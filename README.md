@@ -1,7 +1,6 @@
 # Harness
 
-Harness is an OpenCode plugin that implements an AI agent swarm command (`/harness`). 
-It intercepts the command to coordinate a highly structured, multi-agent workflow optimized for integrity, verification, and autonomous execution.
+Harness is a powerful OpenCode plugin designed to coordinate multi-agent workflows, streamline artifact-driven planning, and automate diagnostic repairs. It achieves this by intercepting specific slash commands and driving structured, Qwen-optimized prompts.
 
 ## Features
 
@@ -10,8 +9,28 @@ It intercepts the command to coordinate a highly structured, multi-agent workflo
 - **Strict Swarm Mechanics**: Enforces workspace isolation (in `.agents/`), state persistence (`BRIEFING.md`, `progress.md`), and deterministic handoff protocols.
 - **Integrity Validation**: The Forensic and Victory Auditors actively monitor for cheating, hardcoded facades, and timeline fabrications, failing the task if violations are found.
 - **Qwen-Optimized**: Agent system prompts are heavily structured with XML tags to guide reasoning models (like Qwen 3.5/3.6) with strict constraints.
-- **Auto-Repair / Debugging**: Use the `/debug` command to automatically fetch CI/CD logs, analyze stack traces, and iteratively repair failures locally with strict scope containment.
-- **Strategic Planning Mode**: Use the `/plan` command to forcefully shift the agent into an artifact-driven planning mode that requires your explicit approval before mutating any state or writing code.
+
+## Commands
+
+### 1. `/harness`
+Triggers the multi-agent swarm workflow.
+- Intercepts the chat and forces a 9-step questionnaire to define the project scope, constraints, and testable criteria.
+- Spawns headless agent sessions (Sentinel, Orchestrator, Workers) that coordinate through the `.agents/` directory.
+- Relies on Sentinel Crons for liveness checks and progress reporting.
+
+### 2. `/debug <target>`
+Triggers an iterative, automated diagnostic loop for repairing failures.
+- **`<target>`**: Can be a PR number (e.g. `PR:123`), CI run ID (`GITHUB_RUN:456`), or a generic error context (`local_test_failure`).
+- Injects strict operational constraints to prevent guesswork and ensure strict verification.
+- Enforces a 3-phase troubleshooting workflow: Log Analysis, Batching Strategy, and Execution & Verification.
+- Exposes a `fetch_diagnostic_logs` tool to retrieve remote CI/CD logs or instructs the agent to run them locally.
+
+### 3. `/plan <request>`
+Forces the agent into a strict, artifact-driven strategic planning mode before modifying code.
+- Blocks execution of modifying terminal commands or code alterations until you approve the design.
+- Generates a mandatory `[descriptive_plan_name].md` artifact for you to review and approve natively in the OpenCode UI (`request_feedback = true`).
+- Enforces transparent reconnaissance and deep read-only analysis of the codebase.
+- Mandates the generation of a `walkthrough.md` artifact summarizing the work upon successful execution.
 
 ## Installation
 
