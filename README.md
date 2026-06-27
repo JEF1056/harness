@@ -41,12 +41,18 @@ Forces the agent into a strict, artifact-driven strategic planning mode before m
 
 Add the plugin to your `opencode.json` file. OpenCode automatically installs remote plugins at startup.
 
+**Important Note on Updates**: Package managers heavily cache Git repository URLs. To ensure OpenCode always fetches the latest changes from the `main` branch rather than a cached version, append `#main` to the URL. Alternatively, for local development, you can provide the absolute path to your local repository.
+
 ```json
 {
-  "plugin": ["github:JEF1056/harness"]
+  "plugin": ["github:JEF1056/harness#main"]
 }
 ```
 
 ### Step 2: Restart OpenCode
 
-Restart OpenCode. The plugin loads automatically upon restart. Type `/harness [optional instructions]`, `/debug <target>`, or `/plan <request>` in your chat to begin.
+Restart OpenCode. The plugin loads automatically upon restart. 
+
+*Note: The `/harness`, `/debug`, and `/plan` commands are dynamically registered into OpenCode's configuration at startup via the plugin's `config` hook, so they will automatically populate in your `/` command dropdown menu!*
+
+Type `/harness [optional instructions]`, `/debug <target>`, or `/plan <request>` in your chat to begin.
