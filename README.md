@@ -11,6 +11,7 @@ It intercepts the command to coordinate a highly structured, multi-agent workflo
 - **Integrity Validation**: The Forensic and Victory Auditors actively monitor for cheating, hardcoded facades, and timeline fabrications, failing the task if violations are found.
 - **Qwen-Optimized**: Agent system prompts are heavily structured with XML tags to guide reasoning models (like Qwen 3.5/3.6) with strict constraints.
 - **Auto-Repair / Debugging**: Use the `/debug` command to automatically fetch CI/CD logs, analyze stack traces, and iteratively repair failures locally with strict scope containment.
+- **Strategic Planning Mode**: Use the `/plan` command to forcefully shift the agent into an artifact-driven planning mode that requires your explicit approval before mutating any state or writing code.
 
 ## Installation
 
@@ -29,4 +30,4 @@ Add the plugin to your `opencode.json` file. OpenCode automatically installs rem
 
 ### Step 2: Restart OpenCode
 
-Restart OpenCode. The plugin loads automatically upon restart. Type `/harness` or `/debug <target>` in your chat to begin.
+Restart OpenCode. The plugin loads automatically upon restart. Type `/harness`, `/debug <target>`, or `/plan <request>` in your chat to begin.
