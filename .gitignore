@@ -1,0 +1,12 @@
+# Agent workspaces
+.agents/
+prompt_draft.md
+ORIGINAL_REQUEST.md
+
+# OS / Editor
+.DS_Store
+.vscode/
+
+# Node
+node_modules/
+dist/
