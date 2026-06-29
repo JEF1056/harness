@@ -1,4 +1,5 @@
 {
+  "$schema": "https://opencode.ai/config.json",
   "command": {
     "harness": {
       "description": "Trigger the harness multi-agent swarm workflow",
