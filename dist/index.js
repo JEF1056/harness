@@ -338,9 +338,10 @@ export const server = async (input, options) => {
                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
                         : args.prompt;
                     try {
-                        // Spawn the subagent natively using the SDK prompt endpoint with a subtask part
-                        await input.client.v2.session.prompt({
-                            sessionID: context.sessionID,
+                        // Spawn the subagent natively using the V1 prompt endpoint (which creates child sessions)
+                        await input.client.session.prompt({
+                            path: { id: context.sessionID },
+                            query: { directory: workspaceRoot },
                             body: {
                                 noReply: true,
                                 parts: [
@@ -357,15 +358,14 @@ export const server = async (input, options) => {
                         let subtaskID = null;
                         for (let i = 0; i < 20; i++) {
                             await new Promise(resolve => setTimeout(resolve, 500));
-                            const messagesRes = await input.client.v2.session.messages({
-                                sessionID: context.sessionID,
-                                limit: 10,
-                                order: "desc"
+                            const messagesRes = await input.client.session.messages({
+                                path: { id: context.sessionID },
+                                query: { directory: workspaceRoot, limit: 10 }
                             });
                             for (const msg of messagesRes.data || []) {
                                 for (const part of msg.parts || []) {
                                     if (part.type === "subtask" && part.agent === args.subagent_type && part.description === args.label) {
-                                        subtaskID = part.subtaskID;
+                                        subtaskID = part.sessionID;
                                         break;
                                     }
                                 }
@@ -378,10 +378,17 @@ export const server = async (input, options) => {
                         if (!subtaskID) {
                             throw new Error("Could not retrieve spawned subtask session ID from messages.");
                         }
-                        // Wait for the subtask session to complete
-                        await input.client.v2.session.wait({
-                            sessionID: subtaskID
-                        });
+                        // Wait for the subtask session to complete (become idle)
+                        for (let i = 0; i < 3600; i++) {
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            const statusRes = await input.client.session.status({
+                                query: { directory: workspaceRoot }
+                            });
+                            const sessionStatus = statusRes.data?.[subtaskID];
+                            if (sessionStatus && sessionStatus.type === "idle") {
+                                break;
+                            }
+                        }
                         return `Subagent ${args.subagent_type} successfully completed the subtask (Session ID: ${subtaskID}). You can now inspect its handoff.md.`;
                     }
                     catch (error) {
