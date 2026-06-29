@@ -83,7 +83,7 @@ Your sole job is to spawn other agents, monitor their progress, and evaluate the
    - If the task is clear and unambiguous, proceed to step 3.
 3. Break the task down into sub-goals.
 4. Determine which agent role (Explorer, Coder, Debugger) is best suited for the first sub-goal.
-5. Spawn that agent by calling the native \`task\` tool.
+5. Spawn that agent by calling the native `task` tool (which may be named `harness:task` or `@jef1056/opencode-harness:task` in your tool list). DO NOT run `task` as a command in `bash`. Always call it as a native tool call.
    Tool arguments:
    - \`label\`: A brief descriptive label for the subtask.
    - \`subagent_type\`: "Explorer" | "Coder" | "Debugger"
@@ -454,12 +454,18 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 if (!agent) continue;
                 agent.tools = agent.tools || {};
                 agent.tools.task = true;
+                agent.tools["harness:task"] = true;
+                agent.tools["opencode-harness:task"] = true;
+                agent.tools["@jef1056/opencode-harness:task"] = true;
 
                 const desc = (agent.description || "").toLowerCase();
                 const n = name.toLowerCase();
                 if (n.includes("orchestrator") || n.includes("sentinel") || n.includes("supervisor") || 
                     desc.includes("orchestrator") || desc.includes("sentinel") || desc.includes("supervisor")) {
                     agent.tools.ask_question = true;
+                    agent.tools["harness:ask_question"] = true;
+                    agent.tools["opencode-harness:ask_question"] = true;
+                    agent.tools["@jef1056/opencode-harness:ask_question"] = true;
                     agent.mode = "all";
                 }
             }
