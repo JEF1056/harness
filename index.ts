@@ -559,6 +559,9 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     text: `${QWEN_OPTIMIZED_REPAIR_PROMPT}\n\n<diagnostic_target>\nTarget ID: ${args}\nLogs:\n${logs}\n</diagnostic_target>\n\nBegin Phase 1: Log Analysis.`
                 });
             }
+        },
+        "tool.definition": async (input: any, output: any) => {
+            console.warn("[HARNESS DEBUG] tool.definition hook called for ID:", input.toolID);
         }
     };
 };
