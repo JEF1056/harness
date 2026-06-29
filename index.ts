@@ -374,6 +374,10 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
             const command = cmdInput.command;
             const args = cmdInput.arguments || "";
 
+            if (command === "harness" || command === "plan" || command === "debug") {
+                cmdOutput.parts.length = 0;
+            }
+
             if (command === "harness") {
                 // Initialize Swarm Workspace
                 try {
