@@ -1,4 +1,4 @@
-import { Plugin, PluginInput, PluginOptions } from "@opencode-ai/plugin";
+import { Plugin, PluginInput, PluginOptions, tool } from "@opencode-ai/plugin";
 import * as fs from "fs";
 import * as path from "path";
 import { spawn } from "child_process";
@@ -65,15 +65,12 @@ Your sole job is to spawn other agents, monitor their progress, and evaluate the
    - If the task is clear and unambiguous, proceed to step 2.
 2. Break the task down into sub-goals.
 3. Determine which agent role (Explorer, Coder, Debugger) is best suited for the first sub-goal.
-4. Spawn that agent by executing the OpenCode \`task\` CLI command using your \`bash\` tool (do not look for a JSON function/tool named \`task\`; use the \`bash\` tool directly).
-   Command format:
-   \`\`\`bash
-   task \\
-     --label "<Label>" \\
-     --subagent_type "<Explorer|Coder|Debugger>" \\
-     --prompt '<Instructions>' \\
-     --reasoning '<Brief explanation of why this agent is being spawned>'
-   \`\`\`
+4. Spawn that agent by calling the native \`task\` tool.
+   Tool arguments:
+   - \`label\`: A brief descriptive label for the subtask.
+   - \`subagent_type\`: "Explorer" | "Coder" | "Debugger"
+   - \`prompt\`: Detailed instructions for the subagent.
+   - \`reasoning\`: Reasoning explaining why this agent is being spawned.
 5. Wait for the agent to complete and return its handoff.
 6. Read the \`handoff.md\` in the subagent's directory under \`.agents/\`. Verify the agent's work.
 7. If verified, spawn the next agent. If failed, spawn a Debugger or re-prompt the agent.
@@ -329,6 +326,75 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 clearInterval(heartbeatInterval);
                 heartbeatInterval = null;
             }
+        },
+        tool: {
+            task: tool({
+                description: "Spawn a subagent to work on a specific sub-task natively in OpenCode.",
+                args: {
+                    label: tool.schema.string().describe("Label for the task"),
+                    subagent_type: tool.schema.enum(["Explorer", "Coder", "Debugger"]).describe("The type of subagent to spawn"),
+                    prompt: tool.schema.string().describe("The instructions for the subagent"),
+                    reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned")
+                },
+                execute: async (args, context) => {
+                    const subagentPrompt = args.reasoning
+                        ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
+                        : args.prompt;
+
+                    try {
+                        // Spawn the subagent natively using the SDK prompt endpoint with a subtask part
+                        await (input.client as any).v2.session.prompt({
+                            sessionID: context.sessionID,
+                            body: {
+                                noReply: true,
+                                parts: [
+                                    {
+                                        type: "subtask",
+                                        prompt: subagentPrompt,
+                                        description: args.label,
+                                        agent: args.subagent_type
+                                    }
+                                ]
+                            }
+                        });
+
+                        // Resolve the subtask session ID by querying the messages of the parent session
+                        let subtaskID: string | null = null;
+                        for (let i = 0; i < 20; i++) {
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                            const messagesRes = await (input.client as any).v2.session.messages({
+                                sessionID: context.sessionID,
+                                limit: 10,
+                                order: "desc"
+                            });
+                            for (const msg of messagesRes.data || []) {
+                                for (const part of msg.parts || []) {
+                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === args.label) {
+                                        subtaskID = part.subtaskID;
+                                        break;
+                                    }
+                                }
+                                if (subtaskID) break;
+                            }
+                            if (subtaskID) break;
+                        }
+
+                        if (!subtaskID) {
+                            throw new Error("Could not retrieve spawned subtask session ID from messages.");
+                        }
+
+                        // Wait for the subtask session to complete
+                        await (input.client as any).v2.session.wait({
+                            sessionID: subtaskID
+                        });
+
+                        return `Subagent ${args.subagent_type} successfully completed the subtask (Session ID: ${subtaskID}). You can now inspect its handoff.md.`;
+                    } catch (error: any) {
+                        console.error("Failed to execute native task tool:", error);
+                        throw error;
+                    }
+                }
+            })
         },
         config: async (config: any) => {
             config.agent = config.agent || {};
