@@ -567,7 +567,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
             }
         },
         "tool.definition": async (input: any, output: any) => {
-            console.warn("[HARNESS DEBUG] tool.definition hook called for ID:", input.toolID);
+            // Remove debug log that breaks TUI
         }
     };
 };
