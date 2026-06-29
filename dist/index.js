@@ -320,7 +320,8 @@ export const server = async (input, options) => {
                 description: "Swarm Orchestrator & Supervisor. Manages task delegation, monitors heartbeats, evaluates handoffs, and audits final criteria.",
                 prompt: getFullAgentPrompt("Sentinel"),
                 tools: {
-                    task: true
+                    task: true,
+                    ask_question: true
                 }
             };
             config.agent.Explorer = config.agent.explorer = {
@@ -349,6 +350,7 @@ export const server = async (input, options) => {
                     desc.includes("orchestrator") || desc.includes("sentinel") || desc.includes("supervisor")) {
                     agent.tools = agent.tools || {};
                     agent.tools.task = true;
+                    agent.tools.ask_question = true;
                     agent.mode = "all";
                 }
             }
@@ -365,48 +367,46 @@ export const server = async (input, options) => {
                     if (!fs.existsSync(agentsDir)) {
                         fs.mkdirSync(agentsDir, { recursive: true });
                     }
-                    // Create Sentinel Agent folder structure
-                    const sentinelDir = path.join(agentsDir, 'sentinel_init');
-                    if (!fs.existsSync(sentinelDir)) {
-                        fs.mkdirSync(sentinelDir, { recursive: true });
-                    }
-                    fs.writeFileSync(path.join(sentinelDir, 'BRIEFING.md'), `# BRIEFING\n\n## 🔒 My Identity\nRole: Sentinel\nID: init\n\n## 🔒 Key Constraints\nSee Universal Mechanics.\n\n## 🔒 My Workflow\nTask: Orchestrate the harness swarm workflow\n`);
-                    fs.writeFileSync(path.join(sentinelDir, 'progress.md'), `# Progress\nLast visited: ${new Date().toISOString()}\nStatus: Initializing\n`);
-                    // Write prompt_draft.md
-                    const draftContent = `# Harness Prompt Draft
-
-## 1. Primary Objective
-${args || "Orchestrate the swarm workflow."}
-
-## 2. Acceptance Criteria
-To be determined by Sentinel.
-
-## 3. Boundaries & Constraints
-None specified.
-
-## 4. Integrity Mode
-Development
-`;
-                    fs.writeFileSync(path.join(workspaceRoot, 'prompt_draft.md'), draftContent, 'utf8');
-                    // Start monitoring
-                    startHeartbeatMonitor();
-                    // Initialize state for interactive questionnaire
+                    // Initialize state with primary objective
                     const statePath = path.join(agentsDir, 'state.json');
                     const initialState = {
                         status: "questionnaire",
-                        current_step: 2,
-                        answers: {
-                            "1. Objective": args || "Orchestrate the swarm workflow."
-                        }
+                        objective: args || "Orchestrate the swarm workflow."
                     };
                     fs.writeFileSync(statePath, JSON.stringify(initialState, null, 2), 'utf8');
-                    // Prompt the user with the introduction and Question 2
+                    // Prompt the user with introduction text
                     cmdOutput.parts.push({
                         id: "prt_" + Math.random().toString(36).substring(2),
                         sessionID: cmdInput.sessionID,
                         messageID: "msg_" + Math.random().toString(36).substring(2),
                         type: "text",
-                        text: `### 🤖 Harness Swarm Requirement Gathering\n\nI have initialized the requirement gathering workflow.\n\n**Step 2 of 9: What are the specific, testable acceptance criteria?**`
+                        text: `### 🤖 Harness Swarm Requirement Gathering\n\nI have initialized the requirement gathering workflow. Please fill out the form below to configure the swarm.`
+                    });
+                    // Add a pending tool call part to trigger OpenCode's native question modal
+                    const questionInput = {
+                        questions: [
+                            { question: "Step 2 of 9: What are the specific, testable acceptance criteria?", is_multi_select: false, options: [] },
+                            { question: "Step 3 of 9: Which existing files or modules will be modified or analyzed?", is_multi_select: false, options: [] },
+                            { question: "Step 4 of 9: Are there any specific files, folders, or directories that are off-limits?", is_multi_select: false, options: [] },
+                            { question: "Step 5 of 9: How should the final changes be verified (e.g., unit tests, manual checks)?", is_multi_select: false, options: [] },
+                            { question: "Step 6 of 9: Are there specific style, formatting, or documentation rules to follow?", is_multi_select: false, options: [] },
+                            { question: "Step 7 of 9: If a build or test fails, should the subagent retry or escalate immediately?", is_multi_select: false, options: [] },
+                            { question: "Step 8 of 9: Are there any credentials, private keys, or API secrets to protect?", is_multi_select: false, options: [] },
+                            { question: "Step 9 of 9: Should we validate changes against a reference/original implementation (e.g., compile checks, diff checks)?", is_multi_select: false, options: [] }
+                        ]
+                    };
+                    cmdOutput.parts.push({
+                        id: "prt_" + Math.random().toString(36).substring(2),
+                        sessionID: cmdInput.sessionID,
+                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        type: "tool",
+                        callID: "call_" + Math.random().toString(36).substring(2),
+                        tool: "default_api:ask_question",
+                        state: {
+                            status: "pending",
+                            input: questionInput,
+                            raw: JSON.stringify(questionInput)
+                        }
                     });
                 }
                 catch (error) {
@@ -440,79 +440,49 @@ Development
                 });
             }
         },
-        "experimental.text.complete": async (ctxInput, ctxOutput) => {
-            const statePath = path.join(agentsDir, 'state.json');
-            if (!fs.existsSync(statePath))
-                return;
-            try {
-                const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-                if (state.status !== "questionnaire")
+        "tool.execute.after": async (toolInput, toolOutput) => {
+            if (toolInput.tool === "default_api:ask_question" || toolInput.tool === "ask_question") {
+                const statePath = path.join(agentsDir, 'state.json');
+                if (!fs.existsSync(statePath))
                     return;
-                // 1. Fetch the user's answer (which is the last message in this session)
-                const sessionRes = await input.client.session.messages({ path: { id: ctxInput.sessionID } });
-                const messagesList = sessionRes.data || sessionRes;
-                if (!Array.isArray(messagesList) || messagesList.length === 0)
-                    return;
-                let lastUserMsg = null;
-                for (let i = messagesList.length - 1; i >= 0; i--) {
-                    const msg = messagesList[i];
-                    const info = msg.info || msg;
-                    if (info.role === 'user') {
-                        lastUserMsg = msg;
-                        break;
+                try {
+                    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+                    if (state.status !== "questionnaire")
+                        return;
+                    // Parse answers from tool output
+                    let answers = [];
+                    try {
+                        const parsed = JSON.parse(toolOutput.output);
+                        if (Array.isArray(parsed)) {
+                            answers = parsed;
+                        }
+                        else if (parsed && typeof parsed === 'object') {
+                            answers = Object.values(parsed);
+                        }
                     }
-                }
-                if (!lastUserMsg)
-                    return;
-                // Extract text content from the last user message parts
-                let userText = "";
-                const parts = lastUserMsg.parts || [];
-                for (const part of parts) {
-                    if (part.type === 'text') {
-                        userText += part.text;
+                    catch {
+                        answers = [toolOutput.output];
                     }
-                }
-                userText = userText.trim();
-                // 2. Record the user's answer
-                const QUESTIONS = {
-                    2: "Acceptance Criteria",
-                    3: "Key Components & Files",
-                    4: "Boundaries & Constraints",
-                    5: "Testing Strategy",
-                    6: "Code Style & Documentation",
-                    7: "Failure Escalation",
-                    8: "Security & Secrets",
-                    9: "Integrity Check Mode"
-                };
-                const currentKey = `${state.current_step}. ${QUESTIONS[state.current_step]}`;
-                state.answers[currentKey] = userText || "Not specified.";
-                // 3. Move to next step
-                state.current_step += 1;
-                if (state.current_step <= 9) {
-                    // Save state
-                    fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf8');
-                    // Respond with the next question
-                    const NEXT_QUESTIONS = {
-                        3: "**Step 3 of 9: Which existing files or modules will be modified or analyzed?**",
-                        4: "**Step 4 of 9: Are there any specific files, folders, or directories that are off-limits?**",
-                        5: "**Step 5 of 9: How should the final changes be verified (e.g., unit tests, manual checks)?**",
-                        6: "**Step 6 of 9: Are there specific style, formatting, or documentation rules to follow?**",
-                        7: "**Step 7 of 9: If a build or test fails, should the subagent retry or escalate immediately?**",
-                        8: "**Step 8 of 9: Are there any credentials, private keys, or API secrets to protect?**",
-                        9: "**Step 9 of 9: Should we validate changes against a reference/original implementation (e.g., compile checks, diff checks)?**"
-                    };
-                    ctxOutput.text = `### 🤖 Harness Swarm Requirement Gathering\n\nAnswer recorded.\n\n${NEXT_QUESTIONS[state.current_step]}`;
-                }
-                else {
-                    // Questionnaire complete!
+                    // Set state status to running
                     state.status = "running";
                     fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf8');
                     // Compile prompt_draft.md
+                    const QUESTIONS = [
+                        "Acceptance Criteria",
+                        "Key Components & Files",
+                        "Boundaries & Constraints",
+                        "Testing Strategy",
+                        "Code Style & Documentation",
+                        "Failure Escalation",
+                        "Security & Secrets",
+                        "Integrity Check Mode"
+                    ];
                     let draftContent = `# Harness Prompt Draft\n\n`;
-                    draftContent += `## 1. Primary Objective\n${state.answers["1. Objective"] || "Not specified."}\n\n`;
-                    for (let step = 2; step <= 9; step++) {
-                        const key = `${step}. ${QUESTIONS[step]}`;
-                        draftContent += `## ${step}. ${QUESTIONS[step]}\n${state.answers[key] || "Not specified."}\n\n`;
+                    draftContent += `## 1. Primary Objective\n${state.objective || "Orchestrate the swarm workflow."}\n\n`;
+                    for (let idx = 0; idx < QUESTIONS.length; idx++) {
+                        const step = idx + 2;
+                        const answer = answers[idx] || "Not specified.";
+                        draftContent += `## ${step}. ${QUESTIONS[idx]}\n${answer}\n\n`;
                     }
                     fs.writeFileSync(path.join(workspaceRoot, 'prompt_draft.md'), draftContent, 'utf8');
                     // Create Sentinel folders
@@ -526,7 +496,7 @@ Development
                     startHeartbeatMonitor();
                     // Spawn Sentinel natively using the SDK prompt endpoint with a subtask part
                     await input.client.session.prompt({
-                        path: { id: ctxInput.sessionID },
+                        path: { id: toolInput.sessionID },
                         body: {
                             noReply: true,
                             parts: [
@@ -539,14 +509,27 @@ Development
                             ]
                         }
                     }).catch(err => {
-                        console.error("Failed to spawn Sentinel subtask:", err);
+                        console.error("Failed to spawn Sentinel subtask in tool.execute.after:", err);
                     });
-                    ctxOutput.text = `### 🤖 Harness Swarm Requirement Gathering\n\n🎉 **Requirement gathering complete!**\n\nI have generated **[prompt_draft.md](file:///${workspaceRoot.replace(/\\/g, '/')}/prompt_draft.md)** with your specifications and spawned the **Sentinel** orchestrator agent.\n\nYou can switch to the newly spawned Sentinel session in the sidebar to monitor the swarm's progress.`;
+                    // Add a notification message to the user that the swarm has spawned
+                    await input.client.session.prompt({
+                        path: { id: toolInput.sessionID },
+                        body: {
+                            noReply: true,
+                            parts: [
+                                {
+                                    type: "text",
+                                    text: `### 🤖 Harness Swarm Requirement Gathering\n\n🎉 **Requirement gathering complete!**\n\nI have generated **[prompt_draft.md](file:///${workspaceRoot.replace(/\\/g, '/')}/prompt_draft.md)** and spawned the **Sentinel** orchestrator agent.\n\nYou can switch to the newly spawned Sentinel session in the sidebar to monitor progress.`
+                                }
+                            ]
+                        }
+                    }).catch(err => {
+                        console.error("Failed to post success message in tool.execute.after:", err);
+                    });
                 }
-            }
-            catch (e) {
-                console.error("Error in questionnaire text completion:", e);
-                ctxOutput.text = `Error in requirement gathering: ${e.message}`;
+                catch (e) {
+                    console.error("Error finalizing native questionnaire answers:", e);
+                }
             }
         }
     };
