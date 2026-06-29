@@ -448,16 +448,17 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 prompt: getFullAgentPrompt("Debugger")
             };
 
-            // Automatically enable the task tool and set mode to 'all' for any agent acting as an orchestrator, supervisor, or sentinel
+            // Automatically enable the task tool for all agents, and set mode to 'all' + enable ask_question for supervisors
             for (const name of Object.keys(config.agent)) {
                 const agent = config.agent[name];
                 if (!agent) continue;
+                agent.tools = agent.tools || {};
+                agent.tools.task = true;
+
                 const desc = (agent.description || "").toLowerCase();
                 const n = name.toLowerCase();
                 if (n.includes("orchestrator") || n.includes("sentinel") || n.includes("supervisor") || 
                     desc.includes("orchestrator") || desc.includes("sentinel") || desc.includes("supervisor")) {
-                    agent.tools = agent.tools || {};
-                    agent.tools.task = true;
                     agent.tools.ask_question = true;
                     agent.mode = "all";
                 }
