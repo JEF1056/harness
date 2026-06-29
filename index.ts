@@ -274,6 +274,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
         try {
             // Watch existing subagent folders
             if (fs.existsSync(agentsDir)) {
+                startHeartbeatMonitor();
                 const folders = fs.readdirSync(agentsDir);
                 for (const folder of folders) {
                     if (fs.statSync(path.join(agentsDir, folder)).isDirectory()) {
@@ -551,20 +552,25 @@ Development
                     // Start monitoring
                     startHeartbeatMonitor();
 
-                    // Spawn Sentinel in the background asynchronously
-                    const child = spawn('opencode', [
-                        'run',
-                        '--agent', 'Sentinel',
-                        '--fork',
-                        '--session', ctxInput.sessionID,
-                        "A new swarm task has been defined. I have generated 'prompt_draft.md' in the workspace root. Begin orchestrating this task based on the draft."
-                    ], {
-                        detached: true,
-                        stdio: 'ignore'
+                    // Spawn Sentinel natively using the SDK prompt endpoint with a subtask part
+                    await input.client.session.prompt({
+                        path: { id: ctxInput.sessionID },
+                        body: {
+                            noReply: true,
+                            parts: [
+                                {
+                                    type: "subtask",
+                                    prompt: `A new swarm task has been defined. I have generated 'prompt_draft.md' in the workspace root. Begin orchestrating this task based on the draft.`,
+                                    description: "Orchestrate harness swarm workflow",
+                                    agent: "Sentinel"
+                                }
+                            ]
+                        }
+                    }).catch(err => {
+                        console.error("Failed to spawn Sentinel subtask:", err);
                     });
-                    child.unref();
 
-                    ctxOutput.text = `### 🤖 Harness Swarm Requirement Gathering\n\n🎉 **Requirement gathering complete!**\n\nI have generated **[prompt_draft.md](file:///${workspaceRoot.replace(/\\/g, '/')}/prompt_draft.md)** with your specifications and spawned the **Sentinel** orchestrator agent in the background.\n\nYou can switch to the newly spawned Sentinel session in the sidebar to monitor the swarm's progress.`;
+                    ctxOutput.text = `### 🤖 Harness Swarm Requirement Gathering\n\n🎉 **Requirement gathering complete!**\n\nI have generated **[prompt_draft.md](file:///${workspaceRoot.replace(/\\/g, '/')}/prompt_draft.md)** with your specifications and spawned the **Sentinel** orchestrator agent.\n\nYou can switch to the newly spawned Sentinel session in the sidebar to monitor the swarm's progress.`;
                 }
             } catch (e: any) {
                 console.error("Error in questionnaire text completion:", e);
