@@ -112,15 +112,16 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
 
 **Phase 2 — Swarm Gate Loop** (you are now the Orchestrator):
 4. Decompose the task into milestones. For each milestone, run the Swarm Gate:
-   a. Spawn an **Explorer** (blocking \`task\`) to investigate. Read its \`handoff.md\`.
-   b. Spawn a **Coder** (blocking \`task\`) to implement. ALWAYS verify Explorer claims first — Explorers can be wrong. Read its \`handoff.md\`.
-   c. Spawn a **Reviewer** (blocking \`task\`) to adversarially assess the Coder's work. Read its \`handoff.md\`. If verdict is REQUEST_CHANGES, loop back to step (b).
-   d. Spawn a **Challenger** (blocking \`task\`) to stress-test and find bugs. Read its \`handoff.md\`.
-   e. Spawn an **Auditor** (blocking \`task\`) to check for cheating. Read its \`handoff.md\`.
+   a. Spawn an **Explorer** to investigate. Read its \`handoff.md\`.
+   b. Spawn a **Coder** to implement. ALWAYS verify Explorer claims first — Explorers can be wrong. Read its \`handoff.md\`.
+   c. Spawn a **Reviewer** to adversarially assess the Coder's work. Read its \`handoff.md\`. If verdict is REQUEST_CHANGES, loop back to step (b).
+   d. Spawn a **Challenger** to stress-test and find bugs. Read its \`handoff.md\`.
+   e. Spawn an **Auditor** to check for cheating. Read its \`handoff.md\`.
    f. If ALL pass, milestone is complete. If the Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally — do not override.
-   g. If any step fails, spawn a **Debugger** (blocking \`task\`) to fix, then loop back.
-5. Follow the Escalation Ladder for stalled subagents: Retry → Replace → Skip → Redistribute → Degrade.
-6. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
+   g. If any step fails, spawn a **Debugger** to fix, then loop back.
+5. **Spawning rules**: Subagents (Explorer, Coder, Reviewer, Challenger, Auditor, Debugger) are leaf-level — they do NOT spawn further subagents. You MAY run multiple leaf-level subagents concurrently using \`task_nowait\` + \`task_status\`. However, the phases of the Swarm Gate loop MUST run in order (Explorer phase → Coder phase → Reviewer phase → Challenger phase → Auditor phase).
+6. Follow the Escalation Ladder for stalled subagents: Retry → Replace → Skip → Redistribute → Degrade.
+7. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
 
 **Phase 3 — Victory Audit**:
 7. When all milestones are complete, spawn a **Victory Auditor** using the blocking \`task\` tool. The project is NOT finished until the Victory Auditor issues "VICTORY CONFIRMED".
@@ -858,7 +859,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                             parts: [
                                 {
                                     type: "text",
-                                    text: getFullAgentPrompt("Sentinel") + `\n\n<current_mode>${isSerial ? "SERIAL" : "PARALLEL"}</current_mode>\n\n${isSerial ? 'You are running in SERIAL mode. Use ONLY the blocking \`task\` tool — do NOT use \`task_nowait\` or \`task_status\`. Spawn one subagent at a time and wait for it to complete before spawning the next.' : 'You are running in PARALLEL mode. You may use \`task_nowait\` and \`task_status\` to attempt parallel subagent spawning for independent sub-goals. For dependent sub-goals, use the blocking \`task\` tool.'}`
+                                    text: getFullAgentPrompt("Sentinel") + `\n\n<current_mode>${isSerial ? "SERIAL" : "PARALLEL"}</current_mode>\n\n${isSerial ? 'You are running in SERIAL mode. Phases of the Swarm Gate loop must run in order (Explorer → Coder → Reviewer → Challenger → Auditor). Within each phase, you may use \`task_nowait\` + \`task_status\` to run multiple leaf-level subagents concurrently — they do NOT spawn further subagents. Use the blocking \`task\` tool if you prefer simplicity.' : 'You are running in PARALLEL mode. You may use \`task_nowait\` and \`task_status\` to spawn multiple independent subagents concurrently. For dependent phases, use the blocking \`task\` tool.'}`
                                 }
                             ]
                         }
@@ -872,7 +873,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                         messageID: "msg_" + Math.random().toString(36).substring(2),
                         type: "text",
                         text: isSerial
-                            ? `### 🤖 Harness Swarm (Serial Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator in serial mode — spawn subagents one at a time using the blocking \`task\` tool.`
+                            ? `### 🤖 Harness Swarm (Serial Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator in serial mode — Swarm Gate phases run sequentially (Explorer → Coder → Reviewer → Challenger → Auditor). Use \`task_nowait\` + \`task_status\` for concurrent leaf-level subagents within a phase, or blocking \`task\` for simplicity.`
                             : `### 🤖 Harness Swarm (Parallel Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Use \`task_nowait\` + \`task_status\` for parallel subagent spawning, or \`task\` for blocking sequential spawns.`
                     });
 
