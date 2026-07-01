@@ -20,6 +20,7 @@ You are given a specific role and set of constraints.
 ## Core Directives
 - **Zero Configuration**: Never assume a framework is set up correctly. Always verify.
 - **The .agents/ Directory**: Agents communicate via state files stored in the hidden \`.agents/\` folder at the project root.
+- **Directory Structure**: Each milestone gets its own subdirectory under \`.agents/<milestone_id>/\` containing agent-specific folders. The Sentinel's state lives in \`.agents/sentinel/\`, not \`.agents/sentinel_init/\`. All plan files from the \`/plan\` command live in \`.agents/plans/\` with descriptive kebab-case filenames.
 - **Strict Separation**: Each spawned agent gets its own subdirectory (e.g., \`.agents/explorer_lexer_1/\`). You can read any folder but may ONLY write to your own directory.
 - **Code Prohibition**: The \`.agents/\` directory is strictly for metadata (plans, progress, handoffs). Source code, tests, and data must NEVER be placed here.
 
@@ -66,10 +67,14 @@ const pendingSubtasks = new Map<string, { agent: string, label: string }>();
 // --- 3. Subagent Model Resolution ---
 
 // Resolve the model for a given subagent. Priority:
-//   1. Per-agent config already set in opencode.json (config.agent[Name].model)
-//   2. Per-agent env var (HARNESS_<NAME>_MODEL, e.g. HARNESS_EXPLORER_MODEL)
-//   3. Global env var (HARNESS_SUBAGENT_MODEL)
-function resolveSubagentModel(agentName: string, config: any): string | undefined {
+//   1. Per-agent model from harness.json (harnessConfig.models[Name])
+//   2. Per-agent config already set in opencode.json (config.agent[Name].model)
+//   3. Per-agent env var (HARNESS_<NAME>_MODEL, e.g. HARNESS_EXPLORER_MODEL)
+//   4. Global env var (HARNESS_SUBAGENT_MODEL)
+function resolveSubagentModel(agentName: string, config: any, harnessConfig?: { models?: Record<string, string> }): string | undefined {
+    if (harnessConfig?.models?.[agentName]) {
+        return harnessConfig.models[agentName];
+    }
     if (config.agent?.[agentName]?.model) {
         return config.agent[agentName].model;
     }
@@ -112,13 +117,12 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
 6. If \`prompt_draft.md\` already exists and \`state.json\` status is "running", skip to Phase 2. If ambiguous, ask clarifying questions via \`ask_question\`.
 
 **Phase 2 — Swarm Gate Loop** (you are now the Orchestrator):
-4. Decompose the task into milestones. For each milestone, run the Swarm Gate:
+4. Decompose the task into milestones. Identify independent milestones and spawn sub-Orchestrators concurrently via \`task_nowait\`. Dependent milestones must use blocking \`task\`. For each milestone, run the Swarm Gate:
    a. Spawn an **Explorer** to investigate. After spawning, tell the user to switch to the subagent session. After they return, read its \`handoff.md\` from \`.agents/\`.
    b. Spawn a **Coder** to implement. ALWAYS verify Explorer claims first — Explorers can be wrong. Same switch-and-wait pattern.
-   c. Spawn a **Reviewer** to adversarially assess the Coder's work. If verdict is REQUEST_CHANGES, loop back to step (b).
-   d. Spawn a **Challenger** to stress-test and find bugs.
-   e. Spawn an **Auditor** to check for cheating.
-   f. If ALL pass, milestone is complete. If the Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally — do not override.
+c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task_nowait\`. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files. If Reviewer verdict is REQUEST_CHANGES, loop back to step (b).
+    d. Spawn a **Cleanup** agent to remove adversarial test artifacts. Read its \`handoff.md\`.
+    f. If ALL pass, milestone is complete. If the Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally — do not override.
    g. If any step fails, spawn a **Debugger** to fix, then loop back.
 5. **CRITICAL**: The \`task\` tool spawns a subagent and returns IMMEDIATELY — it does NOT wait. After each \`task\` call, you MUST tell the user to switch to the subagent's sidebar session. Do NOT call \`task\` again until the user has returned. After the user returns, read the subagent's \`handoff.md\` from disk before proceeding to the next phase.
 6. Follow the Escalation Ladder for stalled subagents: Retry → Replace → Skip → Redistribute → Degrade.
@@ -130,8 +134,6 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
 
 <constraints>
 - You NEVER write code. You ONLY spawn agents and evaluate their handoffs.
-- In SERIAL mode, use ONLY the blocking \`task\` tool — one subagent at a time.
-- Use \`task_nowait\` + \`task_status\` only for independent sub-goals (e.g., multiple Explorers).
 </constraints>
 
 <skill_loading>
@@ -158,20 +160,17 @@ You are a dispatch-only manager. You MUST NOT write code or solve problems direc
 **The Swarm Gate Loop** (run per milestone):
    a. Spawn an **Explorer** to investigate and recommend a fix strategy. Read its \`handoff.md\`.
    b. Spawn an **Armed Worker** to implement the fix based on Explorer findings. ALWAYS verify Explorer claims first — Explorers can be wrong. Read its \`handoff.md\`.
-   c. Spawn a **Reviewer** to analyze the Worker's diffs for correctness, completeness, and quality. Read its \`handoff.md\`.
-   d. Spawn an **Empirical Challenger** to stress-test the code — write tests, find bugs. Read its \`handoff.md\`.
-   e. Spawn a **Forensic Auditor** to check for cheating (hardcoded results, facade functions). Read its \`handoff.md\`.
-   f. Evaluate ALL outputs. If ALL pass, mark milestone complete. If ANY fail, loop back to step (a) or (b) as needed.
+c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task_nowait\`. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files.
+    d. Spawn a **Cleanup** agent to remove adversarial test artifacts. Read its \`handoff.md\`.
+    f. Evaluate ALL outputs. If ALL pass, mark milestone complete. If ANY fail, loop back to step (a) or (b) as needed.
    g. **Mandatory Integrity**: If the Forensic Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally. Do not override.
 
-4. **Dual Track Architecture**: For greenfield projects, run an "Implementation Track" (builds code) and an "E2E Testing Track" (builds black-box requirement-driven tests). For serial mode, run Implementation first, then E2E Testing.
+4. **Dual Track Architecture**: For greenfield projects, run an "Implementation Track" (builds code) and an "E2E Testing Track" (builds black-box requirement-driven tests).
 5. When all milestones are complete, update \`state.json\` to "orchestration_complete" and write your \`handoff.md\`.
 </workflow>
 
 <constraints>
 - You NEVER write code. You ONLY spawn agents and evaluate their handoffs.
-- In SERIAL mode, use ONLY the blocking \`task\` tool — one subagent at a time.
-- Use \`task_nowait\` + \`task_status\` only for independent sub-goals (e.g., multiple Explorers).
 </constraints>
 
 <skill_loading>
@@ -350,6 +349,48 @@ You are summoned when a Coder fails or a CI pipeline breaks.
 You should load external testing and log analysis playbooks to find hidden bugs.
 </skill_loading>
 </instructions>
+`,
+    "ExploreInternet": `
+<role>ExploreInternet — Research Agent with Web Access</role>
+
+<instructions>
+You are a research agent that investigates topics using both the codebase AND the internet.
+
+<workflow>
+1. Read the objective from the Orchestrator.
+2. Search the codebase for relevant context (read-only tools: read, grep, glob).
+3. If the codebase lacks sufficient context, use web search tools (search, fetch, deep_search) to research best practices, documentation, and prior art.
+4. Synthesize findings from both sources.
+5. Produce a structured \`handoff.md\` with recommendations, cited sources, and relevant code paths.
+</workflow>
+
+<constraints>
+- Do NOT write or modify code.
+- Cite sources for web-based findings.
+- Prefer codebase evidence over web speculation.
+</constraints>
+</instructions>
+`,
+    "Cleanup": `
+<role>Cleanup — Artifact Purge Agent</role>
+
+<instructions>
+You are a cleanup agent that removes non-essential artifacts before commit.
+
+<workflow>
+1. Scan for adversarial test files created by the Challenger (prefixed with "adv_").
+2. Identify temporary or scratch files that are not part of the deliverable.
+3. Remove adversarial tests and temporary artifacts.
+4. Preserve ONLY critical functional tests required for verification.
+5. Produce a \`handoff.md\` listing what was removed and why.
+</workflow>
+
+<constraints>
+- Never remove source code, configuration, or critical tests.
+- Adversarial tests from the Challenger are NOT required for commit.
+- When in doubt, preserve the file and note it in \`handoff.md\`.
+</constraints>
+</instructions>
 `
 };
 
@@ -375,9 +416,24 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
 
             const agents = fs.readdirSync(agentsDir);
             for (const agent of agents) {
-                if (agent === 'sentinel_init') continue; // Skip initialization bootstrap folder
+                if (agent === 'sentinel') continue; // Skip sentinel bootstrap folder
 
-                const progressPath = path.join(agentsDir, agent, 'progress.md');
+                // Skip non-directories (e.g., state.json files in .agents/)
+                const agentDir = path.join(agentsDir, agent);
+                if (!fs.statSync(agentDir).isDirectory) continue;
+
+                const progressPath = path.join(agentDir, 'progress.md');
+                const handoffPath = path.join(agentDir, 'handoff.md');
+
+                // If handoff.md exists, the agent completed — skip stalled warning
+                if (fs.existsSync(handoffPath)) continue;
+
+                // Crash detection: no progress.md and no handoff.md → may have crashed
+                if (!fs.existsSync(progressPath)) {
+                    showSwarmToast(agent, "May have crashed — no progress.md or handoff.md found.", "warning");
+                    continue;
+                }
+
                 if (fs.existsSync(progressPath)) {
                     const content = fs.readFileSync(progressPath, 'utf8');
 
@@ -394,7 +450,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     if (lastVisitedMatch && lastVisitedMatch[1]) {
                         const lastVisited = new Date(lastVisitedMatch[1]).getTime();
                         const now = Date.now();
-                        
+
                         if (now - lastVisited > 300000) {
                             showSwarmToast(agent, "Appears stalled! Last heartbeat was over 5 minutes ago.", "warning");
                         }
@@ -421,8 +477,8 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
         if (activeWatchers.has(agentName)) return;
         const agentPath = path.join(agentsDir, agentName);
 
-        // Notify user about subagent spawn (except for sentinel_init)
-        if (agentName !== 'sentinel_init') {
+        // Notify user about subagent spawn (except for sentinel)
+        if (agentName !== 'sentinel') {
             showSwarmToast("Swarm Notification", `Spawned subagent: ${agentName}`, "info");
         }
 
@@ -529,12 +585,12 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
             }
         },
         tool: {
-            task: tool({
+       task: tool({
                 description: "Spawn a subagent to work on a specific sub-task natively in OpenCode.",
                 args: {
-                   label: tool.schema.string().describe("Label for the task"),
-                    subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger"]).describe("The type of subagent to spawn"),
-                    prompt: tool.schema.string().describe("The instructions for the subagent"),
+                    label: tool.schema.string().describe("Label for the task"),
+                     subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "ExploreInternet", "Cleanup"]).describe("The type of subagent to spawn"),
+                     prompt: tool.schema.string().describe("The instructions for the subagent"),
                     reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
                     model: tool.schema.string().optional().describe("Optional model override for this subagent (e.g. anthropic/claude-haiku-4-20250514). If omitted, uses the agent's configured model.")
                 },
@@ -596,11 +652,11 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     }
                 }
             }),
-            task_nowait: tool({
+       task_nowait: tool({
                 description: "Spawn a subagent without waiting for it to complete. Use for parallel subagent spawning. Call task_status later to check if it's done.",
                 args: {
-                   label: tool.schema.string().describe("Label for the task"),
-                    subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger"]).describe("The type of subagent to spawn"),
+                    label: tool.schema.string().describe("Label for the task"),
+                     subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "ExploreInternet", "Cleanup"]).describe("The type of subagent to spawn"),
                     prompt: tool.schema.string().describe("The instructions for the subagent"),
                     reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
                     model: tool.schema.string().optional().describe("Optional model override for this subagent")
@@ -704,9 +760,20 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 description: "Dispatch-only manager. Runs the Swarm Gate loop: Explorer → Coder → Reviewer → Challenger → Auditor per milestone.",
                 prompt: getFullAgentPrompt("Orchestrator"),
             };
+            // Load harness.json for dynamic model routing (highest priority)
+            let harnessConfig: { models?: Record<string, string> } = {};
+            try {
+                const harnessPath = path.join(workspaceRoot, 'harness.json');
+                if (fs.existsSync(harnessPath)) {
+                    harnessConfig = JSON.parse(fs.readFileSync(harnessPath, 'utf8'));
+                }
+            } catch (e) {
+                // Non-fatal — proceed without harness.json model overrides
+            }
+
             const agentModels: Record<string, string | undefined> = {};
-            for (const agentName of ["Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger"]) {
-                agentModels[agentName] = resolveSubagentModel(agentName, config);
+            for (const agentName of ["Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "ExploreInternet", "Cleanup"]) {
+                agentModels[agentName] = resolveSubagentModel(agentName, config, harnessConfig);
             }
 
             config.agent.Orchestrator = config.agent.orchestrator = {
@@ -757,6 +824,18 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 prompt: getFullAgentPrompt("Debugger"),
                 ...(agentModels["Debugger"] && { model: agentModels["Debugger"] })
             };
+            config.agent.ExploreInternet = config.agent.exploreinternet = {
+                mode: "subagent",
+                description: "Research agent with internet search capabilities.",
+                prompt: getFullAgentPrompt("ExploreInternet"),
+                ...(agentModels["ExploreInternet"] && { model: agentModels["ExploreInternet"] })
+            };
+            config.agent.Cleanup = config.agent.cleanup = {
+                mode: "subagent",
+                description: "Artifact purge agent. Removes adversarial tests and temporary files before commit.",
+                prompt: getFullAgentPrompt("Cleanup"),
+                ...(agentModels["Cleanup"] && { model: agentModels["Cleanup"] })
+            };
 
             // Enable ask_question for supervisors, and enable subagent delegation permissions for all agents
             for (const name of Object.keys(config.agent)) {
@@ -774,7 +853,9 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     "Challenger": "allow",
                     "Auditor": "allow",
                     "VictoryAuditor": "allow",
-                    "Debugger": "allow"
+                    "Debugger": "allow",
+                    "ExploreInternet": "allow",
+                    "Cleanup": "allow"
                 };
                 agent.permission.task = taskPerms;
                 agent.permission["harness:task"] = taskPerms;
@@ -805,12 +886,11 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
             const command = cmdInput.command;
             const args = cmdInput.arguments || "";
 
-            if (command === "harness" || command === "harness-serial" || command === "plan" || command === "debug") {
+            if (command === "harness" || command === "plan" || command === "debug") {
                 cmdOutput.parts.length = 0;
             }
 
-            if (command === "harness" || command === "harness-serial") {
-                const isSerial = command === "harness-serial";
+            if (command === "harness") {
                 // Initialize Swarm Workspace
                 try {
                     if (!fs.existsSync(agentsDir)) {
@@ -830,13 +910,12 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     const statePath = path.join(agentsDir, 'state.json');
                     const initialState = {
                         status: "questionnaire",
-                        objective: args || "Orchestrate the swarm workflow.",
-                        mode: isSerial ? "serial" : "parallel"
+                        objective: args || "Orchestrate the swarm workflow."
                     };
                     fs.writeFileSync(statePath, JSON.stringify(initialState, null, 2), 'utf8');
 
                     // Create Sentinel folders
-                    const sentinelDir = path.join(agentsDir, 'sentinel_init');
+                    const sentinelDir = path.join(agentsDir, 'sentinel');
                     if (!fs.existsSync(sentinelDir)) {
                         fs.mkdirSync(sentinelDir, { recursive: true });
                     }
@@ -854,7 +933,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                             parts: [
                                 {
                                     type: "text",
-                                    text: getFullAgentPrompt("Sentinel") + `\n\n<current_mode>${isSerial ? "SERIAL" : "PARALLEL"}</current_mode>\n\n${isSerial ? 'You are running in SERIAL mode. Phases of the Swarm Gate loop must run in order (Explorer → Coder → Reviewer → Challenger → Auditor). Within each phase, you may use \`task_nowait\` + \`task_status\` to run multiple leaf-level subagents concurrently — they do NOT spawn further subagents. Use the blocking \`task\` tool if you prefer simplicity.' : 'You are running in PARALLEL mode. You may use \`task_nowait\` and \`task_status\` to spawn multiple independent subagents concurrently. For dependent phases, use the blocking \`task\` tool.'}`
+                                    text: getFullAgentPrompt("Sentinel") + `\n\nYou are running in PARALLEL mode. You may use \`task_nowait\` and \`task_status\` to spawn multiple independent subagents concurrently. For dependent phases, use the blocking \`task\` tool.`
                                 }
                             ]
                         }
@@ -867,9 +946,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                         sessionID: cmdInput.sessionID,
                         messageID: "msg_" + Math.random().toString(36).substring(2),
                         type: "text",
-                        text: isSerial
-                            ? `### 🤖 Harness Swarm (Serial Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator in serial mode — Swarm Gate phases run sequentially (Explorer → Coder → Reviewer → Challenger → Auditor). Use \`task_nowait\` + \`task_status\` for concurrent leaf-level subagents within a phase, or blocking \`task\` for simplicity.`
-                            : `### 🤖 Harness Swarm (Parallel Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Use \`task_nowait\` + \`task_status\` for parallel subagent spawning, or \`task\` for blocking sequential spawns.`
+                        text: `### 🤖 Harness Swarm (Parallel Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Use \`task_nowait\` + \`task_status\` for parallel subagent spawning, or \`task\` for blocking sequential spawns.`
                     });
 
                 } catch (error: any) {
@@ -882,6 +959,15 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     });
                 }
             } else if (command === "plan") {
+                // Ensure .agents/plans/ directory exists before injecting the prompt
+                try {
+                    const plansDir = path.join(workspaceRoot, '.agents', 'plans');
+                    if (!fs.existsSync(plansDir)) {
+                        fs.mkdirSync(plansDir, { recursive: true });
+                    }
+                } catch (e) {
+                    // Non-fatal — the planner can still create the directory
+                }
                 cmdOutput.parts.push({
                     id: "prt_" + Math.random().toString(36).substring(2),
                     sessionID: cmdInput.sessionID,

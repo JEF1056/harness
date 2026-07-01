@@ -6,11 +6,6 @@
       "argumentHint": "[optional instructions]",
       "template": "/harness {{arguments}}"
     },
-    "harness-serial": {
-      "description": "Trigger the harness multi-agent swarm workflow (serial mode — one subagent at a time, Sentinel on main thread)",
-      "argumentHint": "[optional instructions]",
-      "template": "/harness-serial {{arguments}}"
-    },
     "debug": {
       "description": "Automated log-driven debug and repair",
       "argumentHint": "<target_id>",

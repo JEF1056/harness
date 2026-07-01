@@ -8,6 +8,8 @@
   "files": [
     "dist",
     "opencode.json",
+    "harness.json",
+    "harness.json.example",
     "assets"
   ],
   "scripts": {
