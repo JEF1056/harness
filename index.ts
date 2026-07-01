@@ -30,7 +30,7 @@ Never communicate via raw chat dumps. When you finish a task, write a \`handoff.
 1. **Objective Achieved**: What you did.
 2. **Current State**: Where the project is now.
 3. **Open Issues**: What is broken or pending.
-4. **Next Steps**: Explicit instruction for the next agent in the chain.
+4. **Next Steps**: Explicit instruction for the Sentinel to spawn the next agent in the chain (e.g., "Please spawn a Coder to..."). You CANNOT spawn agents yourself.
 5. **Verification Method**: Specific commands (e.g., \`npm test\`) to independently verify the conclusion.
 
 ## Swarm Resilience
@@ -91,7 +91,7 @@ Your sole job is to spawn other agents, monitor their progress, and evaluate the
    - \`reasoning\`: Reasoning explaining why this agent is being spawned.
 6. Wait for the agent to complete and return its handoff.
 7. Read the \`handoff.md\` in the subagent's directory under \`.agents/\`. Verify the agent's work.
-8. If verified, spawn the next agent. If failed, spawn a Debugger or re-prompt the agent.
+8. Based on the subagent's Next Steps request, use the \`task\` tool to spawn the next requested subagent (e.g., if Explorer asks for Coder, spawn Coder). You are the ONLY agent that can spawn subagents.
 9. When the entire task is complete, run a Victory Audit to validate all criteria, compile a final report, and halt the swarm.
 </workflow>
 
@@ -112,7 +112,7 @@ You NEVER write or modify code. Your tools are strictly read-only.
 2. Traverse the codebase to map the architecture relevant to the objective.
 3. Identify all files that need modification.
 4. Document the current state and any edge cases.
-5. <step>Produce a structured analysis report (\`handoff.md\`) recommending a fix strategy.</step>
+5. <step>Produce a structured analysis report (\`handoff.md\`) recommending a fix strategy, then STOP and let the Sentinel spawn the Coder.</step>
 </workflow>
 
 <constraints>
@@ -415,7 +415,6 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
 
                         return `Subagent ${args.subagent_type} successfully completed the subtask (Session ID: ${subtaskID}). You can now inspect its handoff.md.`;
                     } catch (error: any) {
-                        console.error("Failed to execute native task tool:", error);
                         throw error;
                     }
                 }
@@ -448,20 +447,21 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 prompt: getFullAgentPrompt("Debugger")
             };
 
-            // Automatically enable the task tool for all agents, and set mode to 'all' + enable ask_question for supervisors
+            // Automatically enable the task tool and set mode to 'all' + enable ask_question for supervisors
             for (const name of Object.keys(config.agent)) {
                 const agent = config.agent[name];
                 if (!agent) continue;
                 agent.tools = agent.tools || {};
-                agent.tools.task = true;
-                agent.tools["harness:task"] = true;
-                agent.tools["opencode-harness:task"] = true;
-                agent.tools["@jef1056/opencode-harness:task"] = true;
 
                 const desc = (agent.description || "").toLowerCase();
                 const n = name.toLowerCase();
                 if (n.includes("orchestrator") || n.includes("sentinel") || n.includes("supervisor") || 
                     desc.includes("orchestrator") || desc.includes("sentinel") || desc.includes("supervisor")) {
+                    agent.tools.task = true;
+                    agent.tools["harness:task"] = true;
+                    agent.tools["opencode-harness:task"] = true;
+                    agent.tools["@jef1056/opencode-harness:task"] = true;
+                    
                     agent.tools.ask_question = true;
                     agent.tools["harness:ask_question"] = true;
                     agent.tools["opencode-harness:ask_question"] = true;
@@ -525,7 +525,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                             ]
                         }
                     }).catch(err => {
-                        console.error("Failed to spawn Sentinel subtask in command.execute.before:", err);
+                        // Do not console.error here to prevent TUI breakage
                     });
 
                     // Add a notification message to the user that Sentinel has spawned and will ask the questionnaire
@@ -538,7 +538,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     });
 
                 } catch (error: any) {
-                    console.error("Failed to initialize harness swarm:", error);
+                    // Do not console.error here to prevent TUI breakage
                     cmdOutput.parts.push({
                         id: "prt_" + Math.random().toString(36).substring(2),
                         sessionID: cmdInput.sessionID,
