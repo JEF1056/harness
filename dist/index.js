@@ -27,7 +27,7 @@ Never communicate via raw chat dumps. When you finish a task, write a \`handoff.
 1. **Objective Achieved**: What you did.
 2. **Current State**: Where the project is now.
 3. **Open Issues**: What is broken or pending.
-4. **Next Steps**: Explicit instruction for the Sentinel to spawn the next agent in the chain (e.g., "Please spawn a Coder to..."). You CANNOT spawn agents yourself.
+4. **Next Steps**: Explicit instruction for the next agent in the chain.
 5. **Verification Method**: Specific commands (e.g., \`npm test\`) to independently verify the conclusion.
 
 ## Swarm Resilience
@@ -86,7 +86,7 @@ Your sole job is to spawn other agents, monitor their progress, and evaluate the
    - \`reasoning\`: Reasoning explaining why this agent is being spawned.
 6. Wait for the agent to complete and return its handoff.
 7. Read the \`handoff.md\` in the subagent's directory under \`.agents/\`. Verify the agent's work.
-8. Based on the subagent's Next Steps request, use the \`task\` tool to spawn the next requested subagent (e.g., if Explorer asks for Coder, spawn Coder). You are the ONLY agent that can spawn subagents.
+8. If verified, spawn the next agent. If failed, spawn a Debugger or re-prompt the agent.
 9. When the entire task is complete, run a Victory Audit to validate all criteria, compile a final report, and halt the swarm.
 </workflow>
 
@@ -107,7 +107,7 @@ You NEVER write or modify code. Your tools are strictly read-only.
 2. Traverse the codebase to map the architecture relevant to the objective.
 3. Identify all files that need modification.
 4. Document the current state and any edge cases.
-5. <step>Produce a structured analysis report (\`handoff.md\`) recommending a fix strategy, then STOP and let the Sentinel spawn the Coder.</step>
+5. <step>Produce a structured analysis report (\`handoff.md\`) recommending a fix strategy.</step>
 </workflow>
 
 <constraints>
@@ -428,20 +428,27 @@ export const server = async (input, options) => {
                 description: "Log-driven diagnostic and repair agent. Summons when coder builds fail or test regressions occur.",
                 prompt: getFullAgentPrompt("Debugger")
             };
-            // Automatically enable the task tool and set mode to 'all' + enable ask_question for supervisors
+            // Enable ask_question for supervisors, and enable subagent delegation permissions for all agents
             for (const name of Object.keys(config.agent)) {
                 const agent = config.agent[name];
                 if (!agent)
                     continue;
                 agent.tools = agent.tools || {};
+                agent.permission = agent.permission || {};
+                // Grant all agents permission to spawn core Swarm subagents
+                const taskPerms = {
+                    "Explorer": "allow",
+                    "Coder": "allow",
+                    "Debugger": "allow"
+                };
+                agent.permission.task = taskPerms;
+                agent.permission["harness:task"] = taskPerms;
+                agent.permission["opencode-harness:task"] = taskPerms;
+                agent.permission["@jef1056/opencode-harness:task"] = taskPerms;
                 const desc = (agent.description || "").toLowerCase();
                 const n = name.toLowerCase();
                 if (n.includes("orchestrator") || n.includes("sentinel") || n.includes("supervisor") ||
                     desc.includes("orchestrator") || desc.includes("sentinel") || desc.includes("supervisor")) {
-                    agent.tools.task = true;
-                    agent.tools["harness:task"] = true;
-                    agent.tools["opencode-harness:task"] = true;
-                    agent.tools["@jef1056/opencode-harness:task"] = true;
                     agent.tools.ask_question = true;
                     agent.tools["harness:ask_question"] = true;
                     agent.tools["opencode-harness:ask_question"] = true;

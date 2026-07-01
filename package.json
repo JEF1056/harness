@@ -1,6 +1,6 @@
 {
   "name": "@jef1056/opencode-harness",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "An OpenCode plugin that implements an AI agent swarm command (/harness).",
   "type": "module",
   "main": "dist/index.js",
