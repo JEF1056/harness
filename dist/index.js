@@ -89,9 +89,8 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
 
 <workflow>
 **Phase 1 — Requirements Gathering**:
-1. Record the verbatim user request to \`ORIGINAL_REQUEST.md\` in the workspace root.
-2. Check if \`prompt_draft.md\` exists. If NOT, call \`ask_question\` with the 9-step questionnaire:
-   - Step 1: "What is the primary objective? Describe the task you want the swarm to accomplish."
+1. Read \`ORIGINAL_REQUEST.md\` for the user's raw objective (already recorded by the command handler).
+2. Check if \`prompt_draft.md\` exists. If NOT, call \`ask_question\` with the 8 remaining questions (the objective is already known from \`ORIGINAL_REQUEST.md\`):
    - Step 2: "What are the specific, testable acceptance criteria?"
    - Step 3: "Which existing files or modules will be modified or analyzed?"
    - Step 4: "Are there any off-limits files, folders, or directories?"
@@ -100,19 +99,21 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
    - Step 7: "If a build or test fails, should the agent retry or escalate immediately?"
    - Step 8: "Are there credentials, private keys, or API secrets to protect?"
    - Step 9: "Integrity Mode: Development (full audit), Demo (light checks), or Benchmark (strict — flag any pre-built shortcuts)?"
-   Compile answers into \`prompt_draft.md\`, update \`state.json\` status to "running", proceed to Phase 2.
-3. If \`prompt_draft.md\` exists, analyze it. If ambiguous, ask clarifying questions via \`ask_question\`.
+3. Compile the objective from \`ORIGINAL_REQUEST.md\` plus these answers into a polished, well-structured \`prompt_draft.md\`. Write it to the workspace root.
+4. **User Approval**: Use the \`ask_question\` tool to ask the user to review and approve \`prompt_draft.md\`. Do NOT proceed until the user approves. If the user requests changes, revise \`prompt_draft.md\` and ask again.
+5. Once approved, update \`state.json\` status to "running", proceed to Phase 2.
+6. If \`prompt_draft.md\` already exists and \`state.json\` status is "running", skip to Phase 2. If ambiguous, ask clarifying questions via \`ask_question\`.
 
 **Phase 2 — Swarm Gate Loop** (you are now the Orchestrator):
 4. Decompose the task into milestones. For each milestone, run the Swarm Gate:
-   a. Spawn an **Explorer** to investigate. Read its \`handoff.md\`.
-   b. Spawn a **Coder** to implement. ALWAYS verify Explorer claims first — Explorers can be wrong. Read its \`handoff.md\`.
-   c. Spawn a **Reviewer** to adversarially assess the Coder's work. Read its \`handoff.md\`. If verdict is REQUEST_CHANGES, loop back to step (b).
-   d. Spawn a **Challenger** to stress-test and find bugs. Read its \`handoff.md\`.
-   e. Spawn an **Auditor** to check for cheating. Read its \`handoff.md\`.
+   a. Spawn an **Explorer** to investigate. After spawning, tell the user to switch to the subagent session. After they return, read its \`handoff.md\` from \`.agents/\`.
+   b. Spawn a **Coder** to implement. ALWAYS verify Explorer claims first — Explorers can be wrong. Same switch-and-wait pattern.
+   c. Spawn a **Reviewer** to adversarially assess the Coder's work. If verdict is REQUEST_CHANGES, loop back to step (b).
+   d. Spawn a **Challenger** to stress-test and find bugs.
+   e. Spawn an **Auditor** to check for cheating.
    f. If ALL pass, milestone is complete. If the Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally — do not override.
    g. If any step fails, spawn a **Debugger** to fix, then loop back.
-5. **Spawning rules**: Subagents (Explorer, Coder, Reviewer, Challenger, Auditor, Debugger) are leaf-level — they do NOT spawn further subagents. You MAY run multiple leaf-level subagents concurrently using \`task_nowait\` + \`task_status\`. However, the phases of the Swarm Gate loop MUST run in order (Explorer phase → Coder phase → Reviewer phase → Challenger phase → Auditor phase).
+5. **CRITICAL**: The \`task\` tool spawns a subagent and returns IMMEDIATELY — it does NOT wait. After each \`task\` call, you MUST tell the user to switch to the subagent's sidebar session. Do NOT call \`task\` again until the user has returned. After the user returns, read the subagent's \`handoff.md\` from disk before proceeding to the next phase.
 6. Follow the Escalation Ladder for stalled subagents: Retry → Replace → Skip → Redistribute → Degrade.
 7. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
 
@@ -524,7 +525,7 @@ export const server = async (input, options) => {
                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
                         : args.prompt;
                     try {
-                        // Spawn the subagent natively using the V1 prompt endpoint (which creates child sessions)
+                        // Spawn the subagent natively using the V1 prompt endpoint
                         const subtaskPart = {
                             type: "subtask",
                             prompt: subagentPrompt,
@@ -566,18 +567,10 @@ export const server = async (input, options) => {
                         if (!subtaskID) {
                             throw new Error("Could not retrieve spawned subtask session ID from messages.");
                         }
-                        // Wait for the subtask session to complete (become idle)
-                        for (let i = 0; i < 3600; i++) {
-                            await new Promise(resolve => setTimeout(resolve, 1000));
-                            const statusRes = await input.client.session.status({
-                                query: { directory: workspaceRoot }
-                            });
-                            const sessionStatus = statusRes.data?.[subtaskID];
-                            if (sessionStatus && sessionStatus.type === "idle") {
-                                break;
-                            }
-                        }
-                        return `Subagent ${args.subagent_type} successfully completed the subtask (Session ID: ${subtaskID}). You can now inspect its handoff.md.`;
+                        // Return immediately — do NOT wait. The subagent needs exclusive server access.
+                        // The Sentinel should tell the user to switch to the subagent session.
+                        // After the user returns, the Sentinel reads the handoff.md from disk.
+                        return `Subagent ${args.subagent_type} spawned (Session ID: ${subtaskID}). Tell the user to switch to the subagent session in the sidebar. After they return, read its handoff.md from \`.agents/\` to continue.`;
                     }
                     catch (error) {
                         throw error;
@@ -799,7 +792,9 @@ export const server = async (input, options) => {
                     if (fs.existsSync(draftPath)) {
                         fs.unlinkSync(draftPath);
                     }
-                    // Initialize state with primary objective
+                    // Always record the user's verbatim objective
+                    fs.writeFileSync(path.join(workspaceRoot, 'ORIGINAL_REQUEST.md'), `# Original Request\n\n${args || 'No specific objective provided.'}\n`, 'utf8');
+                    // Initialize state — always start at questionnaire
                     const statePath = path.join(agentsDir, 'state.json');
                     const initialState = {
                         status: "questionnaire",
