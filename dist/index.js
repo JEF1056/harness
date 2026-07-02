@@ -402,8 +402,24 @@ export const server = async (input, options) => {
     const activeWatchers = new Map();
     let rootWatcher = null;
     let heartbeatInterval = null;
-    // Set to track agents that have already been warned about (deduplication)
-    const warnedAgents = new Set();
+    // Set to track agents that have already been warned about (deduplication, persisted to disk)
+    const WARNED_FILE = path.join(agentsDir, '.warned');
+    const loadWarnedAgents = () => {
+        try {
+            const raw = fs.readFileSync(WARNED_FILE, 'utf8');
+            return new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
+        }
+        catch {
+            return new Set();
+        }
+    };
+    const saveWarnedAgents = (s) => {
+        try {
+            fs.writeFileSync(WARNED_FILE, [...s].join(','), 'utf8');
+        }
+        catch { }
+    };
+    let warnedAgents = loadWarnedAgents();
     // Start heartbeat monitor if needed
     const startHeartbeatMonitor = () => {
         if (heartbeatInterval)
@@ -413,9 +429,9 @@ export const server = async (input, options) => {
                 return;
             const agents = fs.readdirSync(agentsDir);
             for (const agent of agents) {
-                if (agent === 'sentinel')
-                    continue; // Skip sentinel bootstrap folder
-                // Skip non-directories (e.g., state.json files in .agents/)
+                if (agent === 'sentinel' || agent === 'state.json' || agent === 'plans')
+                    continue; // Skip non-agent entries
+                // Skip non-directories
                 const agentDir = path.join(agentsDir, agent);
                 try {
                     if (!fs.statSync(agentDir).isDirectory)
@@ -434,6 +450,7 @@ export const server = async (input, options) => {
                     const warnKey = `crash_${agent}`;
                     if (!warnedAgents.has(warnKey)) {
                         warnedAgents.add(warnKey);
+                        saveWarnedAgents(warnedAgents);
                         showSwarmToast(agent, "May have crashed — no progress.md or handoff.md found.", "warning");
                     }
                     continue;
@@ -456,6 +473,7 @@ export const server = async (input, options) => {
                             const warnKey = `stalled_${agent}`;
                             if (!warnedAgents.has(warnKey)) {
                                 warnedAgents.add(warnKey);
+                                saveWarnedAgents(warnedAgents);
                                 showSwarmToast(agent, "Appears stalled! Last heartbeat was over 5 minutes ago.", "warning");
                             }
                         }
@@ -886,6 +904,9 @@ export const server = async (input, options) => {
                     if (!fs.existsSync(agentsDir)) {
                         fs.mkdirSync(agentsDir, { recursive: true });
                     }
+                    // Reset warned agents for fresh run
+                    warnedAgents = new Set();
+                    saveWarnedAgents(warnedAgents);
                     // Remove prompt_draft.md if it exists from previous run so Sentinel starts fresh
                     const draftPath = path.join(workspaceRoot, 'prompt_draft.md');
                     if (fs.existsSync(draftPath)) {
