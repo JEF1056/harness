@@ -502,7 +502,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 title,
                 message,
                 variant,
-                duration: variant === "warning" || variant === "error" ? 0 : 6000
+                duration: 0
             }
         }).catch(() => {});
     };

@@ -489,7 +489,7 @@ export const server = async (input, options) => {
                 title,
                 message,
                 variant,
-                duration: variant === "warning" || variant === "error" ? 0 : 6000
+                duration: 0
             }
         }).catch(() => { });
     };
