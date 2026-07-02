@@ -133,7 +133,7 @@ c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task
  7. After all milestones are complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. Read its \`handoff.md\`.
 
  **Phase 4 — Victory Audit**:
- 8. The project is NOT finished until the Victory Auditor issues "VICTORY CONFIRMED". Spawn a **Victory Auditor** using the blocking \`task\` tool.
+ 8. The project is NOT finished until the Victory Auditor issues "VICTORY CONFIRMED". Spawn a **Victory Auditor** using the blocking \`task\` tool. If the Victory Auditor issues "VICTORY REJECTED", loop back to Phase 3 — always run Cleanup again before re-spawning the Victory Auditor.
 </workflow>
 
 <constraints>
