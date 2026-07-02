@@ -8,7 +8,7 @@
     "Challenger": "anthropic/claude-haiku-4-20250514",
     "Auditor": "anthropic/claude-haiku-4-20250514",
     "Debugger": "anthropic/claude-haiku-4-20250514",
-    "ExploreInternet": "anthropic/claude-haiku-4-20250514",
+    "Researcher": "anthropic/claude-haiku-4-20250514",
     "Cleanup": "anthropic/claude-haiku-4-20250514"
   }
 }

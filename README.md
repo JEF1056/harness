@@ -17,7 +17,7 @@ Harness runs a **10-agent parallel swarm** orchestrated by the Sentinel:
 | Auditor | Anti-cheating enforcer — verifies authentic implementation |
 | VictoryAuditor | Final gatekeeper — independent verification, issues VICTORY CONFIRMED or VICTORY REJECTED |
 | Debugger | Log-driven diagnostic — summoned on failure |
-| ExploreInternet | Research agent with web search capabilities |
+| Researcher | Web-aware investigator, runs parallel to Explorer |
 | Cleanup | Artifact purge — removes adversarial tests before commit |
 
 ### The Swarm Gate Loop
@@ -25,13 +25,22 @@ Harness runs a **10-agent parallel swarm** orchestrated by the Sentinel:
 Each milestone passes through a diamond pipeline:
 
 ```
-Explorer → Coder → [Reviewer ∥ Challenger ∥ Auditor] → Cleanup → Victory Audit
+[Explorer ∥ Researcher] → Coder → [Reviewer ∥ Challenger ∥ Auditor] → Victory Audit
 ```
 
+- Explorer and Researcher run **concurrently** — Explorer maps the codebase, Researcher investigates external context
 - Reviewer, Challenger, and Auditor run **concurrently** via `task_nowait`
-- Cleanup runs after quality gates to purge adversarial test artifacts
 - Forensic Auditor verdict is mandatory — INTEGRITY VIOLATION unconditionally fails the milestone
 - Dual Track Architecture for greenfield projects: Implementation Track then E2E Testing Track
+
+### Pre-Victory Cleanup
+
+After all milestones complete, a **Cleanup** agent runs once before Victory Audit:
+
+- Removes adversarial test artifacts (prefixed with `adv_`)
+- Formats code using the project's formatter
+- Verifies all tests pass; fixes failures
+- Runs coverage tool and reports delta
 
 ### Swarm Mechanics
 

@@ -38,11 +38,12 @@ Never communicate via raw chat dumps. When you finish a task, write a \`handoff.
 ## Swarm Resilience
 - **Heartbeat**: You must maintain a \`progress.md\` file in your folder, updating a \`Last visited: [timestamp]\` header at least every 5 minutes.
 - **Escalation Ladder**: If an agent is stuck (stale heartbeat), follow this ladder:
-  1. *Retry*: Ping the agent.
-  2. *Replace*: Kill and spawn a replacement reading the old \`progress.md\`.
+  1. *Retry*: Ping the agent by checking \`task_status\`.
+  2. *Replace*: Kill the stale session and spawn a replacement that reads the old \`progress.md\` for context. Write a new \`progress.md\` immediately.
   3. *Skip*: If non-essential.
   4. *Redistribute*: Split remaining tasks.
   5. *Degrade*: Last resort — proceed with partial results.
+- **Auto-Recovery**: The heartbeat monitor will flag stale agents via persistent toast notifications. When you see a stalled warning, apply the Escalation Ladder immediately — do not wait for user action.
 - **Self-Correction**: If you fail a task 3 times, you MUST halt and write a \`escalation.md\` file detailing the failure loop.
 
 ## Skill Registration and Usage Protocol (Dynamic Skill Loading)
@@ -111,18 +112,21 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
 
 **Phase 2 — Swarm Gate Loop** (you are now the Orchestrator):
 4. Decompose the task into milestones. Identify independent milestones and spawn sub-Orchestrators concurrently via \`task_nowait\`. Dependent milestones must use blocking \`task\`. For each milestone, run the Swarm Gate:
-   a. Spawn an **Explorer** to investigate. After spawning, tell the user to switch to the subagent session. After they return, read its \`handoff.md\` from \`.agents/\`.
-   b. Spawn a **Coder** to implement. ALWAYS verify Explorer claims first — Explorers can be wrong. Same switch-and-wait pattern.
+  a. Spawn an **Explorer** and a **Researcher** concurrently via \`task_nowait\`. The Explorer maps the codebase; the Researcher investigates external context. Poll both with \`task_status\`. After they return, read their \`handoff.md\` files from \`.agents/\`.
+    b. Spawn a **Coder** to implement. ALWAYS verify Explorer and Researcher claims first — they can be wrong. Same switch-and-wait pattern.
 c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task_nowait\`. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files. If Reviewer verdict is REQUEST_CHANGES, loop back to step (b).
-    d. Spawn a **Cleanup** agent to remove adversarial test artifacts. Read its \`handoff.md\`.
     f. If ALL pass, milestone is complete. If the Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally — do not override.
    g. If any step fails, spawn a **Debugger** to fix, then loop back.
-5. **CRITICAL**: The \`task\` tool spawns a subagent and returns IMMEDIATELY — it does NOT wait. After each \`task\` call, you MUST tell the user to switch to the subagent's sidebar session. Do NOT call \`task\` again until the user has returned. After the user returns, read the subagent's \`handoff.md\` from disk before proceeding to the next phase.
-6. Follow the Escalation Ladder for stalled subagents: Retry → Replace → Skip → Redistribute → Degrade.
+  5. **CRITICAL**: The \`task\` tool spawns a subagent and returns IMMEDIATELY — it does NOT wait. After each \`task\` call, you MUST tell the user to switch to the subagent's sidebar session. Do NOT call \`task\` again until the user has returned. After the user returns, read the subagent's \`handoff.md\` from disk before proceeding to the next phase.
+ 6. **Subagent health**: After spawning a subagent, periodically poll its session with \`task_status\`. If the subagent's \`progress.md\` hasn't updated in 5+ minutes and there is no \`handoff.md\`, apply the Escalation Ladder: kill the stale session, read its \`progress.md\` for context, then spawn a replacement with the same task. If the replacement also fails, escalate to Skip or Redistribute.
+ 7. Follow the Escalation Ladder for stalled subagents: Retry → Replace → Skip → Redistribute → Degrade.
 7. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
 
-**Phase 3 — Victory Audit**:
-7. When all milestones are complete, spawn a **Victory Auditor** using the blocking \`task\` tool. The project is NOT finished until the Victory Auditor issues "VICTORY CONFIRMED".
+ **Phase 3 — Pre-Victory Cleanup**:
+ 7. After all milestones are complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. Read its \`handoff.md\`.
+
+ **Phase 4 — Victory Audit**:
+ 8. The project is NOT finished until the Victory Auditor issues "VICTORY CONFIRMED". Spawn a **Victory Auditor** using the blocking \`task\` tool.
 </workflow>
 
 <constraints>
@@ -151,15 +155,16 @@ You are a dispatch-only manager. You MUST NOT write code or solve problems direc
 3. For smaller tasks, run the **Swarm Gate** loop directly:
 
 **The Swarm Gate Loop** (run per milestone):
-   a. Spawn an **Explorer** to investigate and recommend a fix strategy. Read its \`handoff.md\`.
-   b. Spawn an **Armed Worker** to implement the fix based on Explorer findings. ALWAYS verify Explorer claims first — Explorers can be wrong. Read its \`handoff.md\`.
+a. Spawn an **Explorer** and a **Researcher** concurrently via \`task_nowait\`. Poll both with \`task_status\`. The Explorer maps the codebase; the Researcher investigates external context. Read their \`handoff.md\` files.
+    b. Spawn an **Armed Worker** to implement the fix based on Explorer and Researcher findings. ALWAYS verify their claims first — they can be wrong. Read its \`handoff.md\`.
 c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task_nowait\`. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files.
-    d. Spawn a **Cleanup** agent to remove adversarial test artifacts. Read its \`handoff.md\`.
     f. Evaluate ALL outputs. If ALL pass, mark milestone complete. If ANY fail, loop back to step (a) or (b) as needed.
    g. **Mandatory Integrity**: If the Forensic Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally. Do not override.
 
 4. **Dual Track Architecture**: For greenfield projects, run an "Implementation Track" (builds code) and an "E2E Testing Track" (builds black-box requirement-driven tests).
-5. When all milestones are complete, update \`state.json\` to "orchestration_complete" and write your \`handoff.md\`.
+5. **Subagent health**: After spawning a subagent, periodically poll with \`task_status\`. If \`progress.md\` is stale and no \`handoff.md\` exists, replace the agent with a fresh instance. If two replacements fail, skip the step or redistribute the work.
+  6. After all milestones are complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. Read its \`handoff.md\`.
+  7. When everything is ready, update \`state.json\` to "orchestration_complete" and write your \`handoff.md\`.
 </workflow>
 
 <constraints>
@@ -343,18 +348,17 @@ You should load external testing and log analysis playbooks to find hidden bugs.
 </skill_loading>
 </instructions>
 `,
-    "ExploreInternet": `
-<role>ExploreInternet — Research Agent with Web Access</role>
+    "Researcher": `
+<role>Researcher — Web-Aware Investigator</role>
 
 <instructions>
-You are a research agent that investigates topics using both the codebase AND the internet.
+You are a research agent that investigates topics using both the codebase AND the internet. You run concurrently with the Explorer — the Explorer maps the codebase, you research external context.
 
 <workflow>
 1. Read the objective from the Orchestrator.
-2. Search the codebase for relevant context (read-only tools: read, grep, glob).
-3. If the codebase lacks sufficient context, use web search tools (search, fetch, deep_search) to research best practices, documentation, and prior art.
-4. Synthesize findings from both sources.
-5. Produce a structured \`handoff.md\` with recommendations, cited sources, and relevant code paths.
+2. Use web search tools (search, fetch, deep_search) to research best practices, documentation, API references, and prior art relevant to the task.
+3. Cross-reference findings with the Explorer's handoff (if available).
+4. Produce a structured \`handoff.md\` with recommendations, cited sources, and relevant code paths.
 </workflow>
 
 <constraints>
@@ -365,22 +369,24 @@ You are a research agent that investigates topics using both the codebase AND th
 </instructions>
 `,
     "Cleanup": `
-<role>Cleanup — Artifact Purge Agent</role>
+<role>Cleanup — Artifact Purge & Quality Agent</role>
 
 <instructions>
-You are a cleanup agent that removes non-essential artifacts before commit.
+You are a cleanup and quality agent that prepares the codebase for final submission. Read \`ORIGINAL_REQUEST.md\` and \`prompt_draft.md\` first so you understand the original intent before deciding what to keep or remove.
 
 <workflow>
-1. Scan for adversarial test files created by the Challenger (prefixed with "adv_").
-2. Identify temporary or scratch files that are not part of the deliverable.
-3. Remove adversarial tests and temporary artifacts.
-4. Preserve ONLY critical functional tests required for verification.
-5. Produce a \`handoff.md\` listing what was removed and why.
+1. **Read intent**: Load \`ORIGINAL_REQUEST.md\` and \`prompt_draft.md\` to understand the original objective and acceptance criteria.
+2. **Remove artifacts**: Scan for adversarial test files created by the Challenger (prefixed with "adv_"). Remove them and any temporary or scratch files. Preserve critical functional tests.
+3. **Format**: Run the project's formatter (e.g., \`npm run format\`, \`prettier\`, \`black\`, \`go fmt\`) on all modified files. Ensure the codebase is consistently formatted.
+4. **Tests passing**: Run the project's test suite. Verify all tests pass. If any test fails, investigate and fix the root cause (do NOT suppress the failure).
+5. **Test coverage**: Run the coverage tool (e.g., \`npm run test:coverage\`, \`jest --coverage\`, \`pytest --cov\`). Report coverage impact. If coverage dropped significantly, flag it in your handoff.
+6. Produce a \`handoff.md\` listing what was removed, what was formatted, test results, and coverage delta.
 </workflow>
 
 <constraints>
 - Never remove source code, configuration, or critical tests.
 - Adversarial tests from the Challenger are NOT required for commit.
+- If no formatter or test runner is configured, note this in handoff.md and proceed.
 - When in doubt, preserve the file and note it in \`handoff.md\`.
 </constraints>
 </instructions>
@@ -396,6 +402,8 @@ export const server = async (input, options) => {
     const activeWatchers = new Map();
     let rootWatcher = null;
     let heartbeatInterval = null;
+    // Set to track agents that have already been warned about (deduplication)
+    const warnedAgents = new Set();
     // Start heartbeat monitor if needed
     const startHeartbeatMonitor = () => {
         if (heartbeatInterval)
@@ -409,16 +417,25 @@ export const server = async (input, options) => {
                     continue; // Skip sentinel bootstrap folder
                 // Skip non-directories (e.g., state.json files in .agents/)
                 const agentDir = path.join(agentsDir, agent);
-                if (!fs.statSync(agentDir).isDirectory)
+                try {
+                    if (!fs.statSync(agentDir).isDirectory)
+                        continue;
+                }
+                catch (e) {
                     continue;
+                }
                 const progressPath = path.join(agentDir, 'progress.md');
                 const handoffPath = path.join(agentDir, 'handoff.md');
                 // If handoff.md exists, the agent completed — skip stalled warning
                 if (fs.existsSync(handoffPath))
                     continue;
-                // Crash detection: no progress.md and no handoff.md → may have crashed
+                // Crash detection: no progress.md and no handoff.md → may have crashed (deduplicated)
                 if (!fs.existsSync(progressPath)) {
-                    showSwarmToast(agent, "May have crashed — no progress.md or handoff.md found.", "warning");
+                    const warnKey = `crash_${agent}`;
+                    if (!warnedAgents.has(warnKey)) {
+                        warnedAgents.add(warnKey);
+                        showSwarmToast(agent, "May have crashed — no progress.md or handoff.md found.", "warning");
+                    }
                     continue;
                 }
                 if (fs.existsSync(progressPath)) {
@@ -436,7 +453,11 @@ export const server = async (input, options) => {
                         const lastVisited = new Date(lastVisitedMatch[1]).getTime();
                         const now = Date.now();
                         if (now - lastVisited > 300000) {
-                            showSwarmToast(agent, "Appears stalled! Last heartbeat was over 5 minutes ago.", "warning");
+                            const warnKey = `stalled_${agent}`;
+                            if (!warnedAgents.has(warnKey)) {
+                                warnedAgents.add(warnKey);
+                                showSwarmToast(agent, "Appears stalled! Last heartbeat was over 5 minutes ago.", "warning");
+                            }
                         }
                     }
                 }
@@ -450,7 +471,7 @@ export const server = async (input, options) => {
                 title,
                 message,
                 variant,
-                duration: 6000
+                duration: variant === "warning" || variant === "error" ? 0 : 6000
             }
         }).catch(() => { });
     };
@@ -569,7 +590,7 @@ export const server = async (input, options) => {
                 description: "Spawn a subagent to work on a specific sub-task natively in OpenCode.",
                 args: {
                     label: tool.schema.string().describe("Label for the task"),
-                    subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "ExploreInternet", "Cleanup"]).describe("The type of subagent to spawn"),
+                    subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]).describe("The type of subagent to spawn"),
                     prompt: tool.schema.string().describe("The instructions for the subagent"),
                     reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
                     model: tool.schema.string().optional().describe("Optional model override for this subagent (e.g. anthropic/claude-haiku-4-20250514). If omitted, uses the agent's configured model.")
@@ -635,7 +656,7 @@ export const server = async (input, options) => {
                 description: "Spawn a subagent without waiting for it to complete. Use for parallel subagent spawning. Call task_status later to check if it's done.",
                 args: {
                     label: tool.schema.string().describe("Label for the task"),
-                    subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "ExploreInternet", "Cleanup"]).describe("The type of subagent to spawn"),
+                    subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]).describe("The type of subagent to spawn"),
                     prompt: tool.schema.string().describe("The instructions for the subagent"),
                     reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
                     model: tool.schema.string().optional().describe("Optional model override for this subagent")
@@ -746,7 +767,7 @@ export const server = async (input, options) => {
                 // Non-fatal — proceed without harness.json model overrides
             }
             const agentModels = {};
-            for (const agentName of ["Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "ExploreInternet", "Cleanup"]) {
+            for (const agentName of ["Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]) {
                 agentModels[agentName] = resolveSubagentModel(agentName, config, harnessConfig);
             }
             config.agent.Orchestrator = config.agent.orchestrator = {
@@ -797,11 +818,11 @@ export const server = async (input, options) => {
                 prompt: getFullAgentPrompt("Debugger"),
                 ...(agentModels["Debugger"] && { model: agentModels["Debugger"] })
             };
-            config.agent.ExploreInternet = config.agent.exploreinternet = {
+            config.agent.Researcher = config.agent.researcher = {
                 mode: "subagent",
                 description: "Research agent with internet search capabilities.",
-                prompt: getFullAgentPrompt("ExploreInternet"),
-                ...(agentModels["ExploreInternet"] && { model: agentModels["ExploreInternet"] })
+                prompt: getFullAgentPrompt("Researcher"),
+                ...(agentModels["Researcher"] && { model: agentModels["Researcher"] })
             };
             config.agent.Cleanup = config.agent.cleanup = {
                 mode: "subagent",
@@ -826,7 +847,7 @@ export const server = async (input, options) => {
                     "Auditor": "allow",
                     "VictoryAuditor": "allow",
                     "Debugger": "allow",
-                    "ExploreInternet": "allow",
+                    "Researcher": "allow",
                     "Cleanup": "allow"
                 };
                 agent.permission.task = taskPerms;
@@ -923,21 +944,26 @@ export const server = async (input, options) => {
             }
             else if (command === "plan") {
                 // Ensure .agents/plans/ directory exists before injecting the prompt
+                const plansDir = path.join(workspaceRoot, '.agents', 'plans');
                 try {
-                    const plansDir = path.join(workspaceRoot, '.agents', 'plans');
-                    if (!fs.existsSync(plansDir)) {
-                        fs.mkdirSync(plansDir, { recursive: true });
-                    }
+                    fs.mkdirSync(plansDir, { recursive: true });
                 }
                 catch (e) {
-                    // Non-fatal — the planner can still create the directory
+                    cmdOutput.parts.push({
+                        id: "prt_" + Math.random().toString(36).substring(2),
+                        sessionID: cmdInput.sessionID,
+                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        type: "text",
+                        text: `Error creating plans directory: ${e.message}`
+                    });
+                    return;
                 }
                 cmdOutput.parts.push({
                     id: "prt_" + Math.random().toString(36).substring(2),
                     sessionID: cmdInput.sessionID,
                     messageID: "msg_" + Math.random().toString(36).substring(2),
                     type: "text",
-                    text: `${QWEN_OPTIMIZED_PLAN_PROMPT}\n\n<user_request>\n${args}\n</user_request>`
+                    text: `${QWEN_OPTIMIZED_PLAN_PROMPT}\n\n<plans_directory>${plansDir}</plans_directory>\n\n<user_request>\n${args}\n</user_request>`
                 });
             }
             else if (command === "debug") {
