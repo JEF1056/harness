@@ -1,44 +1,67 @@
 # Harness
 
-Harness is a powerful OpenCode plugin designed to coordinate multi-agent workflows, streamline artifact-driven planning, and automate diagnostic repairs. It achieves this by intercepting specific slash commands and driving structured, Qwen-optimized prompts.
+Harness is a multi-agent swarm plugin for OpenCode. It coordinates independent subagents through a structured Swarm Gate loop, enforces artifact-driven handoffs, and provides diagnostic repair and strategic planning modes.
 
-## Features
+## Architecture
 
-- **8-Agent Swarm Architecture**: Sentinel (macro-supervisor), Orchestrator (dispatch-only manager), Explorer (read-only scout), Coder (armed worker), Reviewer (objective assessor), Challenger (bug hunter), Auditor (anti-cheating enforcer), VictoryAuditor (final gatekeeper).
-- **Interactive Requirement Gathering**: Forces a 9-step questionnaire to establish strict, empirically testable acceptance criteria and Integrity Mode before execution.
-- **Swarm Gate Iteration Loop**: Each milestone passes through Explorer → Coder → Reviewer → Challenger → Auditor. All must pass; Forensic Auditor verdict is mandatory and unconditionally fails the milestone on INTEGRITY VIOLATION.
-- **Dual Track Architecture**: For greenfield projects, runs Implementation Track (builds code) then E2E Testing Track (black-box requirement-driven tests).
-- **Strict Swarm Mechanics**: Enforces workspace isolation (in `.agents/`), state persistence (`BRIEFING.md`, `progress.md`), and deterministic handoff protocols (Observation → Logic Chain → Caveats → Conclusion → Verification).
-- **Escalation Ladder**: Retry → Replace → Skip → Redistribute → Degrade for stalled agents.
-- **System Prompt Protection**: Decoy rule prevents prompt leakage and injection attacks.
-- **Serial Mode**: `/harness-serial` runs one subagent at a time — use when your server handles only one LLM request at a time.
+Harness runs a **10-agent parallel swarm** orchestrated by the Sentinel:
+
+| Agent | Role |
+|---|---|
+| Sentinel | Macro-supervisor — runs on the main thread, manages the swarm |
+| Orchestrator | Dispatch-only manager — decomposes tasks into milestones |
+| Explorer | Read-only scout — maps codebase architecture |
+| Coder | Armed worker — implements changes, verifies builds |
+| Reviewer | Adversarial code reviewer — checks correctness and quality |
+| Challenger | Bug hunter — writes adversarial stress tests |
+| Auditor | Anti-cheating enforcer — verifies authentic implementation |
+| VictoryAuditor | Final gatekeeper — independent verification, issues VICTORY CONFIRMED or VICTORY REJECTED |
+| Debugger | Log-driven diagnostic — summoned on failure |
+| ExploreInternet | Research agent with web search capabilities |
+| Cleanup | Artifact purge — removes adversarial tests before commit |
+
+### The Swarm Gate Loop
+
+Each milestone passes through a diamond pipeline:
+
+```
+Explorer → Coder → [Reviewer ∥ Challenger ∥ Auditor] → Cleanup → Victory Audit
+```
+
+- Reviewer, Challenger, and Auditor run **concurrently** via `task_nowait`
+- Cleanup runs after quality gates to purge adversarial test artifacts
+- Forensic Auditor verdict is mandatory — INTEGRITY VIOLATION unconditionally fails the milestone
+- Dual Track Architecture for greenfield projects: Implementation Track then E2E Testing Track
+
+### Swarm Mechanics
+
+- **Workspace isolation**: All agent state lives in `.agents/` — no source code, tests, or data
+- **Directory structure**: Per-milestone folders (`.agents/<milestone_id>/`), plan files in `.agents/plans/`
+- **State persistence**: `BRIEFING.md` (append-only identity), `progress.md` (heartbeat), `handoff.md` (structured 5-section handoff)
+- **Escalation Ladder**: Retry → Replace → Skip → Redistribute → Degrade for stalled agents
+- **System Prompt Protection**: Decoy rule prevents prompt leakage and injection attacks
 
 ## Commands
 
-### 1. `/harness`
-Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask spawned). Uses `task_nowait` + `task_status` for independent sub-goals, blocking `task` for dependent ones. Runs the full Swarm Gate loop: Explorer → Coder → Reviewer → Challenger → Auditor, then Victory Audit.
+### `/harness [optional instructions]`
 
-### 2. `/harness-serial`
-Same swarm workflow but **strictly serial** — one subagent at a time via blocking `task`. Use when your server handles only one LLM request at a time. The Sentinel runs the full Swarm Gate loop sequentially, waiting for each subagent to complete before spawning the next.
+Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask). Uses `task_nowait` + `task_status` for concurrent sub-goals, blocking `task` for sequential phases.
 
-### 3. `/debug <target>`
-Triggers an iterative, automated diagnostic loop for repairing failures.
-- **`<target>`**: Can be a PR number (e.g. `PR:123`), CI run ID (`GITHUB_RUN:456`), or a generic error context (`local_test_failure`).
-- Enforces a 3-phase workflow: Log Analysis, Batching Strategy, Execution & Verification.
+### `/debug <target>`
 
-### 4. `/plan <request>`
-Forces artifact-driven strategic planning before modifying code.
+Automated diagnostic repair loop (3-phase: Log Analysis → Batching Strategy → Execution & Verification). Target can be a PR (`PR:123`), CI run (`GITHUB_RUN:456`), or freeform error context.
+
+### `/plan <request>`
+
+Strategic artifact-driven planning. Produces a structured plan file in `.agents/plans/<descriptive-name>.md` with kebab-case naming.
 
 ## Installation
 
 ### Prerequisites
+
 - [OpenCode](https://opencode.ai)
 
-### Step 1: Add to opencode.json
-
-Add the plugin to your `opencode.json` file. OpenCode automatically installs remote plugins at startup.
-
-**Important Note on Updates**: Package managers heavily cache Git repository URLs. To ensure OpenCode always fetches the latest changes from the `main` branch rather than a cached version, append `#main` to the URL. Alternatively, for local development, you can provide the absolute path to your local repository.
+### Add to opencode.json
 
 ```json
 {
@@ -46,30 +69,40 @@ Add the plugin to your `opencode.json` file. OpenCode automatically installs rem
 }
 ```
 
-### Step 2: Restart OpenCode
+Append `#main` to always fetch the latest `main` branch (avoids package manager cache). For local development, use an absolute path instead.
 
-Restart OpenCode. The plugin loads automatically upon restart. 
-
-*Note: The `/harness`, `/debug`, and `/plan` commands are dynamically registered into OpenCode's configuration at startup via the plugin's `config` hook, so they will automatically populate in your `/` command dropdown menu!*
-
-Type `/harness [optional instructions]`, `/debug <target>`, or `/plan <request>` in your chat to begin.
+Restart OpenCode. The `/harness`, `/debug`, and `/plan` commands auto-populate in the `/` command menu.
 
 ## Configuration
 
-### Subagent Model Selection
+### Per-Agent Model Routing
 
-By default, subagents use whatever model is configured in your OpenCode setup. You can override which model each subagent uses, which is useful for assigning cheaper/faster models to subagents while keeping a stronger model for the primary session.
+By default, subagents inherit the model configured in your OpenCode setup. You can override which model each agent uses — useful for assigning cheaper models to quality gates while keeping stronger models for critical agents.
 
-**Method 1: Environment Variables**
+**Method 1: `harness.json` (workspace root, highest priority)**
+
+Copy `harness.json.example` to `harness.json` and edit:
+
+```json
+{
+  "models": {
+    "Coder": "anthropic/claude-sonnet-4-20250514",
+    "Reviewer": "anthropic/claude-haiku-4-20250514",
+    "Challenger": "anthropic/claude-haiku-4-20250514"
+  }
+}
+```
+
+Only list agents you want to override. Unlisted agents fall back to the next method.
+
+**Method 2: Environment Variables**
 
 | Variable | Purpose |
 |---|---|
-| `HARNESS_SUBAGENT_MODEL` | Default model for all subagents (Explorer, Coder, Debugger) |
-| `HARNESS_EXPLORER_MODEL` | Model override for the Explorer subagent |
-| `HARNESS_CODER_MODEL` | Model override for the Coder subagent |
-| `HARNESS_DEBUGGER_MODEL` | Model override for the Debugger subagent |
+| `HARNESS_SUBAGENT_MODEL` | Default model for all subagents |
+| `HARNESS_<NAME>_MODEL` | Per-agent override (e.g. `HARNESS_CODER_MODEL`) |
 
-Priority: per-agent env var → global `HARNESS_SUBAGENT_MODEL` → config file → default.
+Priority: `harness.json` → per-agent env var → global env var → `opencode.json` → default.
 
 Example:
 ```bash
@@ -77,23 +110,20 @@ export HARNESS_SUBAGENT_MODEL="anthropic/claude-haiku-4-20250514"
 export HARNESS_CODER_MODEL="anthropic/claude-sonnet-4-20250514"
 ```
 
-**Method 2: opencode.json**
-
-Set the `model` property on any subagent directly in your `opencode.json`:
+**Method 3: `opencode.json`**
 
 ```json
 {
   "agent": {
     "Explorer": { "model": "anthropic/claude-haiku-4-20250514" },
-    "Coder": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "Debugger": { "model": "anthropic/claude-sonnet-4-20250514" }
+    "Coder": { "model": "anthropic/claude-sonnet-4-20250514" }
   }
 }
 ```
 
-**Method 3: Runtime Override via Task Tool**
+**Method 4: Runtime Override**
 
-The Sentinel orchestrator can pass an optional `model` argument when spawning a subagent via the `task` tool, overriding the configured model for that specific invocation:
+The Sentinel can pass an optional `model` argument via the `task` tool for per-invocation override:
 
 ```
 task(subagent_type: "Explorer", prompt: "...", model: "anthropic/claude-haiku-4-20250514")
