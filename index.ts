@@ -65,6 +65,15 @@ When you receive a task, you may be provided with specialized "skills" (playbook
 
 const pendingSubtasks = new Map<string, { agent: string, label: string }>();
 
+// Unique subtask label counter (per subagent type) — prevents session ID collisions
+// when the Sentinel spawns multiple subagents with the same label in the same message.
+const subtaskLabelCounter: Record<string, number> = {};
+function getUniqueLabel(subagentType: string, providedLabel: string): string {
+    const idx = subtaskLabelCounter[subagentType] ?? 0;
+    subtaskLabelCounter[subagentType] = idx + 1;
+    return `${providedLabel}_${idx}`;
+}
+
 // --- 3. Subagent Model Resolution ---
 
 // Resolve the model for a given subagent. Priority:
@@ -634,12 +643,16 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
                         : args.prompt;
 
+                    // Generate a unique label to prevent session ID collisions when
+                    // the Sentinel spawns multiple subagents with the same label.
+                    const uniqueLabel = getUniqueLabel(args.subagent_type, args.label);
+
                     try {
                         // Spawn the subagent natively using the V1 prompt endpoint
                         const subtaskPart: any = {
                             type: "subtask",
                             prompt: subagentPrompt,
-                            description: args.label,
+                            description: uniqueLabel,
                             agent: args.subagent_type
                         };
                         if (args.model) {
@@ -664,7 +677,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                             });
                             for (const msg of messagesRes.data || []) {
                                 for (const part of msg.parts || []) {
-                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === args.label) {
+                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === uniqueLabel) {
                                         subtaskID = (part as any).sessionID;
                                         break;
                                     }
@@ -701,11 +714,15 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
                         : args.prompt;
 
+                    // Generate a unique label to prevent session ID collisions when
+                    // the Sentinel spawns multiple subagents with the same label.
+                    const uniqueLabel = getUniqueLabel(args.subagent_type, args.label);
+
                     try {
                         const subtaskPart: any = {
                             type: "subtask",
                             prompt: subagentPrompt,
-                            description: args.label,
+                            description: uniqueLabel,
                             agent: args.subagent_type
                         };
                         if (args.model) {
@@ -729,7 +746,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                             });
                             for (const msg of messagesRes.data || []) {
                                 for (const part of msg.parts || []) {
-                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === args.label) {
+                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === uniqueLabel) {
                                         subtaskID = (part as any).sessionID;
                                         break;
                                     }
@@ -743,7 +760,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                             throw new Error("Could not retrieve spawned subtask session ID.");
                         }
 
-                        pendingSubtasks.set(subtaskID, { agent: args.subagent_type, label: args.label });
+                        pendingSubtasks.set(subtaskID, { agent: args.subagent_type, label: uniqueLabel });
 
                         return `Subagent ${args.subagent_type} spawned (Session ID: ${subtaskID}). Use task_status to check if it's done.`;
                     } catch (error: any) {
