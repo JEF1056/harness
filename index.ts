@@ -933,6 +933,24 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     agent.mode = "all";
                 }
             }
+
+            // Register slash commands programmatically so they work when installed as a plugin
+            config.command = config.command || {};
+            config.command.harness = {
+                description: "Trigger the harness multi-agent swarm workflow (parallel mode — Sentinel runs on main thread)",
+                argumentHint: "[optional instructions]",
+                template: "/harness {{arguments}}"
+            };
+            config.command.debug = {
+                description: "Automated log-driven debug and repair",
+                argumentHint: "<target_id>",
+                template: "/debug {{arguments}}"
+            };
+            config.command.plan = {
+                description: "Strategic artifact-driven planning mode",
+                argumentHint: "<request>",
+                template: "/plan {{arguments}}"
+            };
         },
         "command.execute.before": async (cmdInput: any, cmdOutput: any) => {
             const command = cmdInput.command;
