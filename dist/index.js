@@ -59,6 +59,14 @@ When you receive a task, you may be provided with specialized "skills" (playbook
 `;
 // --- 2. Pending Subagent Tracker ---
 const pendingSubtasks = new Map();
+// Unique subtask label counter (per subagent type) — prevents session ID collisions
+// when the Sentinel spawns multiple subagents with the same label in the same message.
+const subtaskLabelCounter = {};
+function getUniqueLabel(subagentType, providedLabel) {
+    const idx = subtaskLabelCounter[subagentType] ?? 0;
+    subtaskLabelCounter[subagentType] = idx + 1;
+    return `${providedLabel}_${idx}`;
+}
 // --- 3. Subagent Model Resolution ---
 // Resolve the model for a given subagent. Priority:
 //   1. Per-agent model from harness.json (harnessConfig.models[Name])
@@ -617,12 +625,15 @@ export const server = async (input, options) => {
                     const subagentPrompt = args.reasoning
                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
                         : args.prompt;
+                    // Generate a unique label to prevent session ID collisions when
+                    // the Sentinel spawns multiple subagents with the same label.
+                    const uniqueLabel = getUniqueLabel(args.subagent_type, args.label);
                     try {
                         // Spawn the subagent natively using the V1 prompt endpoint
                         const subtaskPart = {
                             type: "subtask",
                             prompt: subagentPrompt,
-                            description: args.label,
+                            description: uniqueLabel,
                             agent: args.subagent_type
                         };
                         if (args.model) {
@@ -646,7 +657,7 @@ export const server = async (input, options) => {
                             });
                             for (const msg of messagesRes.data || []) {
                                 for (const part of msg.parts || []) {
-                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === args.label) {
+                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === uniqueLabel) {
                                         subtaskID = part.sessionID;
                                         break;
                                     }
@@ -683,11 +694,14 @@ export const server = async (input, options) => {
                     const subagentPrompt = args.reasoning
                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
                         : args.prompt;
+                    // Generate a unique label to prevent session ID collisions when
+                    // the Sentinel spawns multiple subagents with the same label.
+                    const uniqueLabel = getUniqueLabel(args.subagent_type, args.label);
                     try {
                         const subtaskPart = {
                             type: "subtask",
                             prompt: subagentPrompt,
-                            description: args.label,
+                            description: uniqueLabel,
                             agent: args.subagent_type
                         };
                         if (args.model) {
@@ -710,7 +724,7 @@ export const server = async (input, options) => {
                             });
                             for (const msg of messagesRes.data || []) {
                                 for (const part of msg.parts || []) {
-                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === args.label) {
+                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === uniqueLabel) {
                                         subtaskID = part.sessionID;
                                         break;
                                     }
@@ -724,7 +738,7 @@ export const server = async (input, options) => {
                         if (!subtaskID) {
                             throw new Error("Could not retrieve spawned subtask session ID.");
                         }
-                        pendingSubtasks.set(subtaskID, { agent: args.subagent_type, label: args.label });
+                        pendingSubtasks.set(subtaskID, { agent: args.subagent_type, label: uniqueLabel });
                         return `Subagent ${args.subagent_type} spawned (Session ID: ${subtaskID}). Use task_status to check if it's done.`;
                     }
                     catch (error) {
@@ -891,6 +905,23 @@ export const server = async (input, options) => {
                     agent.mode = "all";
                 }
             }
+            // Register slash commands programmatically so they work when installed as a plugin
+            config.command = config.command || {};
+            config.command.harness = {
+                description: "Trigger the harness multi-agent swarm workflow (parallel mode — Sentinel runs on main thread)",
+                argumentHint: "[optional instructions]",
+                template: "/harness {{arguments}}"
+            };
+            config.command.debug = {
+                description: "Automated log-driven debug and repair",
+                argumentHint: "<target_id>",
+                template: "/debug {{arguments}}"
+            };
+            config.command.plan = {
+                description: "Strategic artifact-driven planning mode",
+                argumentHint: "<request>",
+                template: "/plan {{arguments}}"
+            };
         },
         "command.execute.before": async (cmdInput, cmdOutput) => {
             const command = cmdInput.command;
