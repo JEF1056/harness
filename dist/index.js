@@ -1,7 +1,42 @@
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { QWEN_OPTIMIZED_PLAN_PROMPT } from "./plan.js";
 import { QWEN_OPTIMIZED_REPAIR_PROMPT, fetch_diagnostic_logs } from "./debug.js";
+// --- 3. Multi-Instance Awareness: Workspace Lock ---
+const LOCK_FILE = path.join(".agents", "lock.json");
+const LOCK_TTL = parseInt(process.env.HARNESS_LOCK_TTL || "60000", 10);
+function acquireWorkspaceLock(agentsDir, sessionId) {
+    try {
+        const fd = fs.openSync(path.join(agentsDir, "lock.json"), "wx");
+        const lockData = {
+            sessionId,
+            acquiredAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + LOCK_TTL).toISOString()
+        };
+        fs.writeSync(fd, JSON.stringify(lockData, null, 2));
+        fs.closeSync(fd);
+        return { locked: true, lockData };
+    }
+    catch (_e) {
+        try {
+            const existing = JSON.parse(fs.readFileSync(path.join(agentsDir, "lock.json"), "utf8"));
+            return { locked: false, owner: existing.sessionId };
+        }
+        catch {
+            return { locked: false, owner: "unknown" };
+        }
+    }
+}
+function releaseWorkspaceLock(agentsDir) {
+    try {
+        fs.unlinkSync(path.join(agentsDir, "lock.json"));
+    }
+    catch { }
+}
+function isLockStale(lockData) {
+    return new Date(lockData.expiresAt).getTime() < Date.now();
+}
 // --- 1. Universal Swarm Mechanics ---
 const UNIVERSAL_SWARM_MECHANICS = `
 # Universal Swarm Mechanics
@@ -16,7 +51,7 @@ You are given a specific role and set of constraints.
 ## Core Directives
 - **Zero Configuration**: Never assume a framework is set up correctly. Always verify.
 - **The .agents/ Directory**: Agents communicate via state files stored in the hidden \`.agents/\` folder at the project root.
-- **Directory Structure**: Each milestone gets its own subdirectory under \`.agents/<milestone_id>/\` containing agent-specific folders. The Sentinel's state lives in \`.agents/sentinel/\`, not \`.agents/sentinel_init/\`. All plan files from the \`/plan\` command live in \`.agents/plans/\` with descriptive kebab-case filenames.
+- **Directory Structure**: Each milestone gets its own subdirectory under \`.agents/<milestone_id>/\` containing agent-specific folders. The Sentinel's state lives in \`.agents/sessions/<session-id>/sentinel/\` (scoped under a session UUID). All plan files from the \`/plan\` command live in \`.agents/sessions/<session-id>/plans/\` with descriptive kebab-case filenames. Subagent state (handoff.md, progress.md) remains at \`.agents/<agentName>/\`.
 - **Strict Separation**: Each spawned agent gets its own subdirectory (e.g., \`.agents/explorer_lexer_1/\`). You can read any folder but may ONLY write to your own directory.
 - **Code Prohibition**: The \`.agents/\` directory is strictly for metadata (plans, progress, handoffs). Source code, tests, and data must NEVER be placed here.
 
@@ -92,8 +127,8 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
 
 <workflow>
 **Phase 1 — Requirements Gathering**:
-1. Read \`ORIGINAL_REQUEST.md\` for the user's raw objective (already recorded by the command handler).
-2. Check if \`prompt_draft.md\` exists. If NOT, call \`ask_question\` with the 8 remaining questions (the objective is already known from \`ORIGINAL_REQUEST.md\`):
+1. Read \`.agents/sessions/<session-id>/ORIGINAL_REQUEST.md\` for the user's raw objective (already recorded by the command handler).
+2. Check if \`.agents/sessions/<session-id>/prompt_draft.md\` exists. If NOT, call \`ask_question\` with the 8 remaining questions (the objective is already known from \`.agents/sessions/<session-id>/ORIGINAL_REQUEST.md\`):
    - Step 2: "What are the specific, testable acceptance criteria?"
    - Step 3: "Which existing files or modules will be modified or analyzed?"
    - Step 4: "Are there any off-limits files, folders, or directories?"
@@ -102,10 +137,10 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
    - Step 7: "If a build or test fails, should the agent retry or escalate immediately?"
    - Step 8: "Are there credentials, private keys, or API secrets to protect?"
    - Step 9: "Integrity Mode: Development (full audit), Demo (light checks), or Benchmark (strict — flag any pre-built shortcuts)?"
-3. Compile the objective from \`ORIGINAL_REQUEST.md\` plus these answers into a polished, well-structured \`prompt_draft.md\`. Write it to the workspace root.
-4. **User Approval**: Use the \`ask_question\` tool to ask the user to review and approve \`prompt_draft.md\`. Do NOT proceed until the user approves. If the user requests changes, revise \`prompt_draft.md\` and ask again.
-5. Once approved, update \`state.json\` status to "running", proceed to Phase 2.
-6. If \`prompt_draft.md\` already exists and \`state.json\` status is "running", skip to Phase 2. If ambiguous, ask clarifying questions via \`ask_question\`.
+3. Compile the objective from \`.agents/sessions/<session-id>/ORIGINAL_REQUEST.md\` plus these answers into a polished, well-structured \`.agents/sessions/<session-id>/prompt_draft.md\`. Write it to the workspace root. Read \`.agents/sessions/<session-id>/state.json\` for current state.
+4. **User Approval**: Use the \`ask_question\` tool to ask the user to review and approve \`.agents/sessions/<session-id>/prompt_draft.md\`. Do NOT proceed until the user approves. If the user requests changes, revise \`.agents/sessions/<session-id>/prompt_draft.md\` and ask again.
+5. Once approved, update \`.agents/sessions/<session-id>/state.json\` status to "running", proceed to Phase 2.
+6. If \`.agents/sessions/<session-id>/prompt_draft.md\` already exists and \`.agents/sessions/<session-id>/state.json\` status is "running", skip to Phase 2. If ambiguous, ask clarifying questions via \`ask_question\`.
 
 **Phase 2 — Swarm Gate Loop** (you are now the Orchestrator):
 4. Decompose the task into milestones. Identify independent milestones and spawn sub-Orchestrators concurrently via \`task\` (multiple calls in a single message). Dependent milestones must use sequential \`task\` calls. For each milestone, run the Swarm Gate:
@@ -146,7 +181,7 @@ You are a dispatch-only manager. You MUST NOT write code or solve problems direc
 </file_operations>
 
 <workflow>
-1. Assess the complexity of the task from \`prompt_draft.md\`.
+1. Assess the complexity of the task from \`.agents/sessions/<session-id>/prompt_draft.md\`.
 2. For large projects, decompose into 3-7 discrete milestones. For each milestone, spawn a Sub-Orchestrator.
 3. For smaller tasks, run the **Swarm Gate** loop directly:
 
@@ -302,7 +337,7 @@ You are spawned by the Sentinel at project end. You share NO context with the im
 
 <workflow>
 **Phase A — Timeline Audit**:
-1. Read \`ORIGINAL_REQUEST.md\` and all \`handoff.md\` files.
+1. Read \`.agents/sessions/<session-id>/ORIGINAL_REQUEST.md\` and all \`handoff.md\` files.
 2. Check for fabricated history, implausible timestamps, or inconsistent timelines.
 
 **Phase B — Integrity Re-Check**:
@@ -368,10 +403,10 @@ You are a research agent that investigates topics using both the codebase AND th
 <role>Cleanup — Artifact Purge & Quality Agent</role>
 
 <instructions>
-You are a cleanup and quality agent that prepares the codebase for final submission. Read \`ORIGINAL_REQUEST.md\` and \`prompt_draft.md\` first so you understand the original intent before deciding what to keep or remove.
+You are a cleanup and quality agent that prepares the codebase for final submission. Read \`.agents/sessions/<session-id>/ORIGINAL_REQUEST.md\` and \`.agents/sessions/<session-id>/prompt_draft.md\` first so you understand the original intent before deciding what to keep or remove.
 
 <workflow>
-1. **Read intent**: Load \`ORIGINAL_REQUEST.md\` and \`prompt_draft.md\` to understand the original objective and acceptance criteria.
+1. **Read intent**: Load \`.agents/sessions/<session-id>/ORIGINAL_REQUEST.md\` and \`.agents/sessions/<session-id>/prompt_draft.md\` to understand the original objective and acceptance criteria.
 2. **Remove artifacts**: Scan for adversarial test files created by the Challenger (prefixed with "adv_"). Remove them and any temporary or scratch files. Preserve critical functional tests.
 3. **Format**: Run the project's formatter (e.g., \`npm run format\`, \`prettier\`, \`black\`, \`go fmt\`) on all modified files. Ensure the codebase is consistently formatted.
 4. **Tests passing**: Run the project's test suite. Verify all tests pass. If any test fails, investigate and fix the root cause (do NOT suppress the failure).
@@ -425,8 +460,9 @@ export const server = async (input, options) => {
                 return;
             const agents = fs.readdirSync(agentsDir);
             for (const agent of agents) {
-                if (agent === 'sentinel' || agent === 'state.json' || agent === 'plans')
-                    continue; // Skip non-agent entries
+                // Skip session directories (state management, not agents)
+                if (agent === 'sentinel' || agent === 'state.json' || agent === 'plans' || agent === 'sessions' || agent === 'lock.json')
+                    continue;
                 // Skip non-directories
                 const agentDir = path.join(agentsDir, agent);
                 try {
@@ -547,14 +583,24 @@ export const server = async (input, options) => {
                 startHeartbeatMonitor();
                 const folders = fs.readdirSync(agentsDir);
                 for (const folder of folders) {
-                    if (fs.statSync(path.join(agentsDir, folder)).isDirectory()) {
-                        watchAgentFolder(folder);
+                    // Skip session directories (state management, not agents)
+                    if (folder === 'sessions' || folder === 'lock.json')
+                        continue;
+                    const folderPath = path.join(agentsDir, folder);
+                    try {
+                        if (fs.statSync(folderPath).isDirectory()) {
+                            watchAgentFolder(folder);
+                        }
                     }
+                    catch (e) { }
                 }
             }
             // Watch .agents directory for new subagent spawns
             rootWatcher = fs.watch(agentsDir, (eventType, filename) => {
                 if (!filename)
+                    return;
+                // Skip session directory changes (state management, not agents)
+                if (filename === 'sessions' || filename === 'lock.json')
                     return;
                 const fullPath = path.join(agentsDir, filename);
                 try {
@@ -585,6 +631,8 @@ export const server = async (input, options) => {
     watchSwarm();
     return {
         dispose: async () => {
+            // Release workspace lock on unload
+            releaseWorkspaceLock(agentsDir);
             // Close all active file watchers on unload
             if (rootWatcher) {
                 rootWatcher.close();
@@ -740,30 +788,56 @@ export const server = async (input, options) => {
                     if (!fs.existsSync(agentsDir)) {
                         fs.mkdirSync(agentsDir, { recursive: true });
                     }
-                    // Reset warned agents for fresh run
-                    warnedAgents = new Set();
-                    saveWarnedAgents(warnedAgents);
-                    // Remove prompt_draft.md if it exists from previous run so Sentinel starts fresh
-                    const draftPath = path.join(workspaceRoot, 'prompt_draft.md');
-                    if (fs.existsSync(draftPath)) {
+                    // Generate unique session ID for this invocation
+                    const sessionId = crypto.randomUUID();
+                    // Acquire workspace lock (race-free via exclusive file creation)
+                    const lockResult = acquireWorkspaceLock(agentsDir, sessionId);
+                    if (!lockResult.locked) {
+                        cmdOutput.parts.push({
+                            id: "prt_" + Math.random().toString(36).substring(2),
+                            sessionID: cmdInput.sessionID,
+                            messageID: "msg_" + Math.random().toString(36).substring(2),
+                            type: "text",
+                            text: `### ⚠️ Workspace Locked\n\nThe workspace is already in use by another Sentinel (session: ${lockResult.owner}).\n\nOnly one Sentinel can operate per workspace at a time. Wait for the current Sentinel to complete, or manually remove \`.agents/lock.json\` to force-release the lock (useful if the previous Sentinel crashed).\n\nTo check the lock status, read \`.agents/lock.json\`.`
+                        });
+                        return;
+                    }
+                    const lockData = lockResult.lockData;
+                    // Store sessionId for use throughout initialization
+                    const sessionDir = path.join(agentsDir, 'sessions', sessionId);
+                    // Reset warned agents for fresh run (scoped to this session)
+                    const sessionWarnedFile = path.join(sessionDir, '.warned');
+                    const saveSessionWarnedAgents = (s) => {
+                        try {
+                            fs.writeFileSync(sessionWarnedFile, [...s].join(','), 'utf8');
+                        }
+                        catch { }
+                    };
+                    let sessionWarnedAgents = new Set();
+                    // Remove prompt_draft.md if it exists from previous run so Sentinel starts fresh (scoped under session directory)
+                    const draftPath = path.join(sessionDir, 'prompt_draft.md');
+                    try {
                         fs.unlinkSync(draftPath);
                     }
-                    // Always record the user's verbatim objective
-                    fs.writeFileSync(path.join(workspaceRoot, 'ORIGINAL_REQUEST.md'), `# Original Request\n\n${args || 'No specific objective provided.'}\n`, 'utf8');
-                    // Initialize state — always start at questionnaire
-                    const statePath = path.join(agentsDir, 'state.json');
+                    catch { }
+                    // Always record the user's verbatim objective (scoped under session directory)
+                    const requestPath = path.join(sessionDir, 'ORIGINAL_REQUEST.md');
+                    fs.writeFileSync(requestPath, `# Original Request\n\n${args || 'No specific objective provided.'}\n`, 'utf8');
+                    // Initialize state — always start at questionnaire (scoped under session directory)
+                    const statePath = path.join(sessionDir, 'state.json');
                     const initialState = {
                         status: "questionnaire",
-                        objective: args || "Orchestrate the swarm workflow."
+                        objective: args || "Orchestrate the swarm workflow.",
+                        sessionId: sessionId
                     };
                     fs.writeFileSync(statePath, JSON.stringify(initialState, null, 2), 'utf8');
-                    // Create Sentinel folders
-                    const sentinelDir = path.join(agentsDir, 'sentinel');
+                    // Create Sentinel folders (scoped under session directory)
+                    const sentinelDir = path.join(sessionDir, 'sentinel');
                     if (!fs.existsSync(sentinelDir)) {
                         fs.mkdirSync(sentinelDir, { recursive: true });
                     }
-                    fs.writeFileSync(path.join(sentinelDir, 'BRIEFING.md'), `# BRIEFING\n\n## 🔒 My Identity\nRole: Sentinel\nID: init\n\n## 🔒 Key Constraints\nSee Universal Mechanics.\n\n## 🔒 My Workflow\nTask: Orchestrate the harness swarm workflow\n`);
-                    fs.writeFileSync(path.join(sentinelDir, 'progress.md'), `# Progress\nLast visited: ${new Date().toISOString()}\nStatus: Initializing\n`);
+                    fs.writeFileSync(path.join(sentinelDir, 'BRIEFING.md'), `# BRIEFING\n\n## 🔒 My Identity\nRole: Sentinel\nSession: ${sessionId}\n\n## 🔒 Key Constraints\nSee Universal Mechanics.\n\n## 🔒 My Workflow\nTask: Orchestrate the harness swarm workflow\n`);
+                    fs.writeFileSync(path.join(sentinelDir, 'progress.md'), `# Progress\nSession: ${sessionId}\nLast visited: ${new Date().toISOString()}\nStatus: Initializing\n`);
                     // Start monitoring
                     startHeartbeatMonitor();
                     // Inject Sentinel prompt directly into the main thread — the LLM becomes the Sentinel
@@ -774,7 +848,7 @@ export const server = async (input, options) => {
                             parts: [
                                 {
                                     type: "text",
-                                    text: getFullAgentPrompt("Sentinel") + `\n\nYou are running in PARALLEL mode. Spawn multiple independent subagents concurrently by calling \`task\` multiple times in a single message. Use \`task_status\` to poll completion. For dependent phases, use sequential \`task\` calls.`
+                                    text: getFullAgentPrompt("Sentinel") + `\n\nYou are running in PARALLEL mode. Your session ID is ${sessionId}. All state files are under \`.agents/sessions/${sessionId}/\`. Spawn multiple independent subagents concurrently by calling \`task\` multiple times in a single message. Use \`task_status\` to poll completion. For dependent phases, use sequential \`task\` calls.`
                                 }
                             ]
                         }
@@ -786,7 +860,7 @@ export const server = async (input, options) => {
                         sessionID: cmdInput.sessionID,
                         messageID: "msg_" + Math.random().toString(36).substring(2),
                         type: "text",
-                        text: `### 🤖 Harness Swarm (Parallel Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Spawn agents concurrently by calling \`task\` multiple times in a single message. Use \`task_status\` to poll. Sequential phases use single \`task\` calls.`
+                        text: `### 🤖 Harness Swarm (Parallel Mode) Initialized\n\n**Session ID: ${sessionId}**\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Your state is under \`.agents/sessions/${sessionId}/\`. Spawn agents concurrently by calling \`task\` multiple times in a single message. Use \`task_status\` to poll. Sequential phases use single \`task\` calls.`
                     });
                 }
                 catch (error) {
