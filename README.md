@@ -6,7 +6,7 @@ Listed in [awesome-opencode](https://github.com/awesome-opencode/awesome-opencod
 
 ## Features
 
-- **Parallel swarm execution**: 2-3 agents run concurrently at each pipeline stage via `task_nowait` for maximum throughput
+- **Parallel swarm execution**: 2-3 agents run concurrently at each pipeline stage via native opencode `task` (multiple calls per message) for maximum throughput
 - **Swarm Gate pipeline**: Diamond workflow with concurrent Explorer/Researcher and concurrent Reviewer/Challenger/Auditor phases
 - **Escalation ladder**: Retry → Replace → Skip → Redistribute → Degrade for stalled agents
 - **Real-time monitoring**: File watchers + heartbeat polling + TUI toast notifications
@@ -56,7 +56,7 @@ Each milestone passes through a diamond pipeline:
 ```
 
 - Explorer and Researcher run **concurrently** — Explorer maps the codebase, Researcher investigates external context
-- Reviewer, Challenger, and Auditor run **concurrently** via `task_nowait`
+- Reviewer, Challenger, and Auditor run **concurrently** via multiple `task` calls in a single message
 - Forensic Auditor verdict is mandatory — INTEGRITY VIOLATION unconditionally fails the milestone
 - Dual Track Architecture for greenfield projects: Implementation Track then E2E Testing Track
 
@@ -105,7 +105,7 @@ The plugin creates the following files automatically:
 
 ### `/harness [optional instructions]`
 
-Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask). Uses `task_nowait` + `task_status` for concurrent sub-goals, blocking `task` for sequential phases.
+Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask). Uses multiple `task` calls per message for concurrent sub-goals, sequential `task` calls for dependent phases, and `task_status` for polling.
 
 ### `/debug <target>`
 
@@ -120,6 +120,7 @@ Strategic artifact-driven planning. Produces a structured plan file in `.agents/
 ### Prerequisites
 
 - [OpenCode](https://opencode.ai)
+- `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` — required for parallel subagent spawning via native `task`. Add to your `~/.bashrc` or set before launching OpenCode.
 
 ### Plugin Caching
 

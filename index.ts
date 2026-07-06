@@ -61,19 +61,7 @@ When you receive a task, you may be provided with specialized "skills" (playbook
  6. *Error Handling*: If a skill file is missing or unreadable, the subagent logs the error in its final \`handoff.md\` and proceeds with best judgment.
 `;
 
-// --- 2. Subagent Session Tracker ---
-// Maps child session ID → { agent, label } for task_status lookups.
-const spawnedSessions = new Map<string, { agent: string, label: string }>();
-
-// Unique label counter (per subagent type) — used only for descriptive titles.
-const subagentLabelCounter: Record<string, number> = {};
-function makeLabel(subagentType: string, providedLabel: string): string {
-    const idx = subagentLabelCounter[subagentType] ?? 0;
-    subagentLabelCounter[subagentType] = idx + 1;
-    return `${providedLabel}_${idx}`;
-}
-
-// --- 3. Subagent Model Resolution ---
+// --- 2. Subagent Model Resolution ---
 
 // Resolve the model for a given subagent. Priority:
 //   1. Per-agent model from harness.json (harnessConfig.models[Name])
@@ -126,15 +114,14 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
 6. If \`prompt_draft.md\` already exists and \`state.json\` status is "running", skip to Phase 2. If ambiguous, ask clarifying questions via \`ask_question\`.
 
 **Phase 2 — Swarm Gate Loop** (you are now the Orchestrator):
-4. Decompose the task into milestones. Identify independent milestones and spawn sub-Orchestrators concurrently via \`task_nowait\`. Dependent milestones must use blocking \`task\`. For each milestone, run the Swarm Gate:
-  a. Spawn an **Explorer** and a **Researcher** concurrently via \`task_nowait\`. The Explorer maps the codebase; the Researcher investigates external context. Poll both with \`task_status\`. After they return, read their \`handoff.md\` files from \`.agents/\`.
-    b. Spawn a **Coder** to implement. ALWAYS verify Explorer and Researcher claims first — they can be wrong. Same switch-and-wait pattern.
-c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task_nowait\`. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files. If Reviewer verdict is REQUEST_CHANGES, loop back to step (b).
+4. Decompose the task into milestones. Identify independent milestones and spawn sub-Orchestrators concurrently via \`task\` (multiple calls in a single message). Dependent milestones must use sequential \`task\` calls. For each milestone, run the Swarm Gate:
+  a. Spawn an **Explorer** and a **Researcher** concurrently via \`task\` in a single message. The Explorer maps the codebase; the Researcher investigates external context. Poll both with \`task_status\`. After they return, read their \`handoff.md\` files from \`.agents/\`.
+    b. Spawn a **Coder** to implement. ALWAYS verify Explorer and Researcher claims first — they can be wrong.
+c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task\` in a single message. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files. If Reviewer verdict is REQUEST_CHANGES, loop back to step (b).
     f. If ALL pass, milestone is complete. If the Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally — do not override.
    g. If any step fails, spawn a **Debugger** to fix, then loop back.
-  5. **CRITICAL**: The \`task\` tool spawns a subagent and returns IMMEDIATELY — it does NOT wait. After each \`task\` call, you MUST tell the user to switch to the subagent's sidebar session. Do NOT call \`task\` again until the user has returned. After the user returns, read the subagent's \`handoff.md\` from disk before proceeding to the next phase.
- 6. **Subagent health**: After spawning a subagent, periodically poll its session with \`task_status\`. If the subagent's \`progress.md\` hasn't updated in 5+ minutes and there is no \`handoff.md\`, apply the Escalation Ladder: kill the stale session, read its \`progress.md\` for context, then spawn a replacement with the same task. If the replacement also fails, escalate to Skip or Redistribute.
- 7. Follow the Escalation Ladder for stalled subagents: Retry → Replace → Skip → Redistribute → Degrade.
+ 5. **Subagent health**: After spawning a subagent, periodically poll its session with \`task_status\`. If the subagent's \`progress.md\` hasn't updated in 5+ minutes and there is no \`handoff.md\`, apply the Escalation Ladder: kill the stale session, read its \`progress.md\` for context, then spawn a replacement with the same task. If the replacement also fails, escalate to Skip or Redistribute.
+  6. Follow the Escalation Ladder for stalled subagents: Retry → Replace → Skip → Redistribute → Degrade.
 7. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
 
  **Phase 3 — Pre-Victory Cleanup**:
@@ -170,9 +157,9 @@ You are a dispatch-only manager. You MUST NOT write code or solve problems direc
 3. For smaller tasks, run the **Swarm Gate** loop directly:
 
 **The Swarm Gate Loop** (run per milestone):
-a. Spawn an **Explorer** and a **Researcher** concurrently via \`task_nowait\`. Poll both with \`task_status\`. The Explorer maps the codebase; the Researcher investigates external context. Read their \`handoff.md\` files.
-    b. Spawn an **Armed Worker** to implement the fix based on Explorer and Researcher findings. ALWAYS verify their claims first — they can be wrong. Read its \`handoff.md\`.
-c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task_nowait\`. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files.
+a. Spawn an **Explorer** and a **Researcher** concurrently via \`task\` in a single message. Poll both with \`task_status\`. The Explorer maps the codebase; the Researcher investigates external context. Read their \`handoff.md\` files.
+    b. Spawn a **Coder** to implement the fix based on Explorer and Researcher findings. ALWAYS verify their claims first — they can be wrong. Read its \`handoff.md\`.
+c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task\` in a single message. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files.
     f. Evaluate ALL outputs. If ALL pass, mark milestone complete. If ANY fail, loop back to step (a) or (b) as needed.
    g. **Mandatory Integrity**: If the Forensic Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally. Do not override.
 
@@ -436,56 +423,6 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
     };
     let warnedAgents = loadWarnedAgents();
 
-    // Spawn a child subagent session via the SDK — no polling, no SubtaskPart hacks.
-    // Returns the child session ID immediately.
-    const spawnSubagent = async (
-        parentSessionID: string,
-        agent: string,
-        label: string,
-        promptText: string,
-        modelOverride: string | undefined,
-        async_: boolean,
-    ): Promise<string> => {
-        // 1) Create child session — SDK returns the child session ID directly.
-        const createRes = await input.client.session.create({
-            body: {
-                parentID: parentSessionID,
-                title: `${label} (@${agent} subagent)`,
-            },
-        });
-        if (!createRes.data) throw new Error("Session creation failed — no response data.");
-        const childSessionID = createRes.data.id;
-
-        // 2) Send the prompt — async (fire-and-forget) or sync (blocking).
-        const promptBody: any = {
-            agent,
-            parts: [{ type: "text", text: promptText }],
-        };
-        if (modelOverride) {
-            promptBody.model = modelOverride;
-        }
-        if (async_) {
-            // Non-blocking: promptAsync returns 204 immediately; child session runs in background.
-            await input.client.session.promptAsync({
-                path: { id: childSessionID },
-                query: { directory: workspaceRoot },
-                body: promptBody,
-            });
-        } else {
-            // Blocking: prompt returns only after the child session finishes processing.
-            await input.client.session.prompt({
-                path: { id: childSessionID },
-                query: { directory: workspaceRoot },
-                body: promptBody,
-            });
-        }
-
-        // 3) Track for task_status lookups.
-        spawnedSessions.set(childSessionID, { agent, label });
-
-        return childSessionID;
-    };
-
     // Start heartbeat monitor if needed
     const startHeartbeatMonitor = () => {
         if (heartbeatInterval) return;
@@ -677,82 +614,17 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 heartbeatInterval = null;
             }
         },
-        tool: {
-       task: tool({
-                 description: "Spawn a subagent to work on a specific sub-task natively in OpenCode.",
-                 args: {
-                     label: tool.schema.string().describe("Label for the task"),
-                      subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]).describe("The type of subagent to spawn"),
-                      prompt: tool.schema.string().describe("The instructions for the subagent"),
-                     reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
-                     model: tool.schema.string().optional().describe("Optional model override for this subagent (e.g. anthropic/claude-haiku-4-20250514). If omitted, uses the agent's configured model.")
-                 },
-                 execute: async (args, context) => {
-                     const subagentPrompt = args.reasoning
-                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
-                         : args.prompt;
-
-                     const childSessionID = await spawnSubagent(context.sessionID, args.subagent_type, makeLabel(args.subagent_type, args.label), subagentPrompt, args.model, false);
-
-                     return `Subagent ${args.subagent_type} spawned (Session ID: ${childSessionID}). Tell the user to switch to the subagent session in the sidebar. After they return, read its handoff.md from \`.agents/\` to continue.`;
-                 }
-             }),
-      task_nowait: tool({
-                 description: "Spawn a subagent without waiting for it to complete. Use for parallel subagent spawning. Call task_status later to check if it's done.",
-                 args: {
-                     label: tool.schema.string().describe("Label for the task"),
-                      subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]).describe("The type of subagent to spawn"),
-                     prompt: tool.schema.string().describe("The instructions for the subagent"),
-                     reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
-                     model: tool.schema.string().optional().describe("Optional model override for this subagent")
-                 },
-                 execute: async (args, context) => {
-                     const subagentPrompt = args.reasoning
-                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
-                         : args.prompt;
-
-                     const childSessionID = await spawnSubagent(context.sessionID, args.subagent_type, makeLabel(args.subagent_type, args.label), subagentPrompt, args.model, true);
-
-                     return `Subagent ${args.subagent_type} spawned (Session ID: ${childSessionID}). Use task_status to check if it's done.`;
-                 }
-             }),
-            task_status: tool({
-                description: "Check the completion status of a subagent spawned via task_nowait.",
-                args: {
-                    sessionID: tool.schema.string().describe("The session ID of the spawned subagent to check")
-                },
-                execute: async (args, context) => {
-                    const statusRes = await input.client.session.status({
-                        query: { directory: workspaceRoot }
-                    });
-                    const sessionStatus = statusRes.data?.[args.sessionID];
-                    const info = spawnedSessions.get(args.sessionID);
-                    const agentName = info?.agent || "unknown";
-
-                    if (!sessionStatus) {
-                        return `Session ${args.sessionID} not found.`;
-                    }
-
-                    if (sessionStatus.type === "idle") {
-                        spawnedSessions.delete(args.sessionID);
-                        return `Subagent ${agentName} (Session ID: ${args.sessionID}) is DONE. You can now inspect its handoff.md.`;
-                    }
-
-                    return `Subagent ${agentName} (Session ID: ${args.sessionID}) is still running (status: ${sessionStatus.type}).`;
-                }
-            })
-        },
-        config: async (config: any) => {
+       tool: {},
+         config: async (config: any) => {
             config.agent = config.agent || {};
             config.agent.Sentinel = config.agent.sentinel = {
                 mode: "all",
                 description: "Swarm Orchestrator & Supervisor. Manages task delegation, monitors heartbeats, evaluates handoffs, and audits final criteria.",
                 prompt: getFullAgentPrompt("Sentinel"),
-                tools: {
-                    task: true,
-                    task_nowait: true,
-                    task_status: true,
-                    ask_question: true
+                defaultConcurrency: 5,
+                permission: {
+                    task: "allow",
+                    ask_question: "allow"
                 }
             };
             config.agent.Orchestrator = config.agent.orchestrator = {
@@ -780,6 +652,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 mode: "subagent",
                 description: "Dispatch-only manager. Decomposes tasks into milestones, runs the Swarm Gate iteration loop (Explorer → Worker → Reviewer → Challenger → Auditor).",
                 prompt: getFullAgentPrompt("Orchestrator"),
+                defaultConcurrency: 5,
                 ...(agentModels["Orchestrator"] && { model: agentModels["Orchestrator"] })
             };
             config.agent.Explorer = config.agent.explorer = {
@@ -844,40 +717,14 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 agent.tools = agent.tools || {};
                 agent.permission = agent.permission || {};
 
-                // Grant all agents permission to spawn core Swarm subagents
-                const taskPerms = {
-                    "Orchestrator": "allow",
-                    "Explorer": "allow",
-                    "Coder": "allow",
-                    "Reviewer": "allow",
-                    "Challenger": "allow",
-                    "Auditor": "allow",
-                    "VictoryAuditor": "allow",
-                    "Debugger": "allow",
-                    "Researcher": "allow",
-                    "Cleanup": "allow"
-                };
-                agent.permission.task = taskPerms;
-                agent.permission["harness:task"] = taskPerms;
-                agent.permission["opencode-harness:task"] = taskPerms;
-                agent.permission["@jef1056/opencode-harness:task"] = taskPerms;
-                agent.permission.task_nowait = taskPerms;
-                agent.permission["harness:task_nowait"] = taskPerms;
-                agent.permission.task_status = taskPerms;
-                agent.permission["harness:task_status"] = taskPerms;
+                // Grant all agents permission to use native task tool
+                agent.permission.task = "allow";
 
                 const desc = (agent.description || "").toLowerCase();
                 const n = name.toLowerCase();
                 if (n.includes("orchestrator") || n.includes("sentinel") || n.includes("supervisor") ||
                     desc.includes("orchestrator") || desc.includes("sentinel") || desc.includes("supervisor")) {
                     agent.tools.ask_question = true;
-                    agent.tools["harness:ask_question"] = true;
-                    agent.tools["opencode-harness:ask_question"] = true;
-                    agent.tools["@jef1056/opencode-harness:ask_question"] = true;
-                    agent.tools.task_nowait = true;
-                    agent.tools["harness:task_nowait"] = true;
-                    agent.tools.task_status = true;
-                    agent.tools["harness:task_status"] = true;
                     agent.mode = "all";
                 }
             }
@@ -955,7 +802,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                             parts: [
                                 {
                                     type: "text",
-                                    text: getFullAgentPrompt("Sentinel") + `\n\nYou are running in PARALLEL mode. You may use \`task_nowait\` and \`task_status\` to spawn multiple independent subagents concurrently. For dependent phases, use the blocking \`task\` tool.`
+                                    text: getFullAgentPrompt("Sentinel") + `\n\nYou are running in PARALLEL mode. Spawn multiple independent subagents concurrently by calling \`task\` multiple times in a single message. Use \`task_status\` to poll completion. For dependent phases, use sequential \`task\` calls.`
                                 }
                             ]
                         }
@@ -968,7 +815,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                         sessionID: cmdInput.sessionID,
                         messageID: "msg_" + Math.random().toString(36).substring(2),
                         type: "text",
-                        text: `### 🤖 Harness Swarm (Parallel Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Use \`task_nowait\` + \`task_status\` for parallel subagent spawning, or \`task\` for blocking sequential spawns.`
+                        text: `### 🤖 Harness Swarm (Parallel Mode) Initialized\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Spawn agents concurrently by calling \`task\` multiple times in a single message. Use \`task_status\` to poll. Sequential phases use single \`task\` calls.`
                     });
 
                 } catch (error: any) {
