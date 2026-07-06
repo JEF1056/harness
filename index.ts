@@ -836,9 +836,8 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     };
                     let sessionWarnedAgents = new Set<string>();
 
-                   // Remove prompt_draft.md if it exists from previous run so Sentinel starts fresh (scoped under session directory)
-                    const draftPath = path.join(sessionDir, 'prompt_draft.md');
-                    try { fs.unlinkSync(draftPath); } catch {}
+                   // Create session directory before writing to it
+                    fs.mkdirSync(sessionDir, { recursive: true });
 
                     // Always record the user's verbatim objective (scoped under session directory)
                     const requestPath = path.join(sessionDir, 'ORIGINAL_REQUEST.md');
@@ -855,9 +854,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
 
                     // Create Sentinel folders (scoped under session directory)
                     const sentinelDir = path.join(sessionDir, 'sentinel');
-                    if (!fs.existsSync(sentinelDir)) {
-                        fs.mkdirSync(sentinelDir, { recursive: true });
-                    }
+                    fs.mkdirSync(sentinelDir, { recursive: true });
                     fs.writeFileSync(path.join(sentinelDir, 'BRIEFING.md'), `# BRIEFING\n\n## 🔒 My Identity\nRole: Sentinel\nSession: ${sessionId}\n\n## 🔒 Key Constraints\nSee Universal Mechanics.\n\n## 🔒 My Workflow\nTask: Orchestrate the harness swarm workflow\n`);
                     fs.writeFileSync(path.join(sentinelDir, 'progress.md'), `# Progress\nSession: ${sessionId}\nLast visited: ${new Date().toISOString()}\nStatus: Initializing\n`);
 
