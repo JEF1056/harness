@@ -61,16 +61,15 @@ When you receive a task, you may be provided with specialized "skills" (playbook
  6. *Error Handling*: If a skill file is missing or unreadable, the subagent logs the error in its final \`handoff.md\` and proceeds with best judgment.
 `;
 
-// --- 2. Pending Subagent Tracker ---
+// --- 2. Subagent Session Tracker ---
+// Maps child session ID → { agent, label } for task_status lookups.
+const spawnedSessions = new Map<string, { agent: string, label: string }>();
 
-const pendingSubtasks = new Map<string, { agent: string, label: string }>();
-
-// Unique subtask label counter (per subagent type) — prevents session ID collisions
-// when the Sentinel spawns multiple subagents with the same label in the same message.
-const subtaskLabelCounter: Record<string, number> = {};
-function getUniqueLabel(subagentType: string, providedLabel: string): string {
-    const idx = subtaskLabelCounter[subagentType] ?? 0;
-    subtaskLabelCounter[subagentType] = idx + 1;
+// Unique label counter (per subagent type) — used only for descriptive titles.
+const subagentLabelCounter: Record<string, number> = {};
+function makeLabel(subagentType: string, providedLabel: string): string {
+    const idx = subagentLabelCounter[subagentType] ?? 0;
+    subagentLabelCounter[subagentType] = idx + 1;
     return `${providedLabel}_${idx}`;
 }
 
@@ -437,6 +436,56 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
     };
     let warnedAgents = loadWarnedAgents();
 
+    // Spawn a child subagent session via the SDK — no polling, no SubtaskPart hacks.
+    // Returns the child session ID immediately.
+    const spawnSubagent = async (
+        parentSessionID: string,
+        agent: string,
+        label: string,
+        promptText: string,
+        modelOverride: string | undefined,
+        async_: boolean,
+    ): Promise<string> => {
+        // 1) Create child session — SDK returns the child session ID directly.
+        const createRes = await input.client.session.create({
+            body: {
+                parentID: parentSessionID,
+                title: `${label} (@${agent} subagent)`,
+            },
+        });
+        if (!createRes.data) throw new Error("Session creation failed — no response data.");
+        const childSessionID = createRes.data.id;
+
+        // 2) Send the prompt — async (fire-and-forget) or sync (blocking).
+        const promptBody: any = {
+            agent,
+            parts: [{ type: "text", text: promptText }],
+        };
+        if (modelOverride) {
+            promptBody.model = modelOverride;
+        }
+        if (async_) {
+            // Non-blocking: promptAsync returns 204 immediately; child session runs in background.
+            await input.client.session.promptAsync({
+                path: { id: childSessionID },
+                query: { directory: workspaceRoot },
+                body: promptBody,
+            });
+        } else {
+            // Blocking: prompt returns only after the child session finishes processing.
+            await input.client.session.prompt({
+                path: { id: childSessionID },
+                query: { directory: workspaceRoot },
+                body: promptBody,
+            });
+        }
+
+        // 3) Track for task_status lookups.
+        spawnedSessions.set(childSessionID, { agent, label });
+
+        return childSessionID;
+    };
+
     // Start heartbeat monitor if needed
     const startHeartbeatMonitor = () => {
         if (heartbeatInterval) return;
@@ -630,144 +679,43 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
         },
         tool: {
        task: tool({
-                description: "Spawn a subagent to work on a specific sub-task natively in OpenCode.",
-                args: {
-                    label: tool.schema.string().describe("Label for the task"),
-                     subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]).describe("The type of subagent to spawn"),
+                 description: "Spawn a subagent to work on a specific sub-task natively in OpenCode.",
+                 args: {
+                     label: tool.schema.string().describe("Label for the task"),
+                      subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]).describe("The type of subagent to spawn"),
+                      prompt: tool.schema.string().describe("The instructions for the subagent"),
+                     reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
+                     model: tool.schema.string().optional().describe("Optional model override for this subagent (e.g. anthropic/claude-haiku-4-20250514). If omitted, uses the agent's configured model.")
+                 },
+                 execute: async (args, context) => {
+                     const subagentPrompt = args.reasoning
+                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
+                         : args.prompt;
+
+                     const childSessionID = await spawnSubagent(context.sessionID, args.subagent_type, makeLabel(args.subagent_type, args.label), subagentPrompt, args.model, false);
+
+                     return `Subagent ${args.subagent_type} spawned (Session ID: ${childSessionID}). Tell the user to switch to the subagent session in the sidebar. After they return, read its handoff.md from \`.agents/\` to continue.`;
+                 }
+             }),
+      task_nowait: tool({
+                 description: "Spawn a subagent without waiting for it to complete. Use for parallel subagent spawning. Call task_status later to check if it's done.",
+                 args: {
+                     label: tool.schema.string().describe("Label for the task"),
+                      subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]).describe("The type of subagent to spawn"),
                      prompt: tool.schema.string().describe("The instructions for the subagent"),
-                    reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
-                    model: tool.schema.string().optional().describe("Optional model override for this subagent (e.g. anthropic/claude-haiku-4-20250514). If omitted, uses the agent's configured model.")
-                },
-                execute: async (args, context) => {
-                    const subagentPrompt = args.reasoning
-                        ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
-                        : args.prompt;
+                     reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
+                     model: tool.schema.string().optional().describe("Optional model override for this subagent")
+                 },
+                 execute: async (args, context) => {
+                     const subagentPrompt = args.reasoning
+                         ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
+                         : args.prompt;
 
-                    // Generate a unique label to prevent session ID collisions when
-                    // the Sentinel spawns multiple subagents with the same label.
-                    const uniqueLabel = getUniqueLabel(args.subagent_type, args.label);
+                     const childSessionID = await spawnSubagent(context.sessionID, args.subagent_type, makeLabel(args.subagent_type, args.label), subagentPrompt, args.model, true);
 
-                    try {
-                        // Spawn the subagent natively using the V1 prompt endpoint
-                        const subtaskPart: any = {
-                            type: "subtask",
-                            prompt: subagentPrompt,
-                            description: uniqueLabel,
-                            agent: args.subagent_type
-                        };
-                        if (args.model) {
-                            subtaskPart.model = args.model;
-                        }
-                        await input.client.session.prompt({
-                            path: { id: context.sessionID },
-                            query: { directory: workspaceRoot },
-                            body: {
-                                noReply: true,
-                                parts: [subtaskPart]
-                            }
-                        });
-
-                        // Resolve the subtask session ID by querying the messages of the parent session
-                        let subtaskID: string | null = null;
-                        for (let i = 0; i < 20; i++) {
-                            await new Promise(resolve => setTimeout(resolve, 500));
-                            const messagesRes = await input.client.session.messages({
-                                path: { id: context.sessionID },
-                                query: { directory: workspaceRoot, limit: 10 }
-                            });
-                            for (const msg of messagesRes.data || []) {
-                                for (const part of msg.parts || []) {
-                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === uniqueLabel) {
-                                        subtaskID = (part as any).sessionID;
-                                        break;
-                                    }
-                                }
-                                if (subtaskID) break;
-                            }
-                            if (subtaskID) break;
-                        }
-
-                        if (!subtaskID) {
-                            throw new Error("Could not retrieve spawned subtask session ID from messages.");
-                        }
-
-                        // Return immediately — do NOT wait. The subagent needs exclusive server access.
-                        // The Sentinel should tell the user to switch to the subagent session.
-                        // After the user returns, the Sentinel reads the handoff.md from disk.
-                        return `Subagent ${args.subagent_type} spawned (Session ID: ${subtaskID}). Tell the user to switch to the subagent session in the sidebar. After they return, read its handoff.md from \`.agents/\` to continue.`;
-                    } catch (error: any) {
-                        throw error;
-                    }
-                }
-            }),
-       task_nowait: tool({
-                description: "Spawn a subagent without waiting for it to complete. Use for parallel subagent spawning. Call task_status later to check if it's done.",
-                args: {
-                    label: tool.schema.string().describe("Label for the task"),
-                     subagent_type: tool.schema.enum(["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Researcher", "Cleanup"]).describe("The type of subagent to spawn"),
-                    prompt: tool.schema.string().describe("The instructions for the subagent"),
-                    reasoning: tool.schema.string().optional().describe("Why this subagent is being spawned"),
-                    model: tool.schema.string().optional().describe("Optional model override for this subagent")
-                },
-                execute: async (args, context) => {
-                    const subagentPrompt = args.reasoning
-                        ? `Reasoning: ${args.reasoning}\n\n${args.prompt}`
-                        : args.prompt;
-
-                    // Generate a unique label to prevent session ID collisions when
-                    // the Sentinel spawns multiple subagents with the same label.
-                    const uniqueLabel = getUniqueLabel(args.subagent_type, args.label);
-
-                    try {
-                        const subtaskPart: any = {
-                            type: "subtask",
-                            prompt: subagentPrompt,
-                            description: uniqueLabel,
-                            agent: args.subagent_type
-                        };
-                        if (args.model) {
-                            subtaskPart.model = args.model;
-                        }
-                        await input.client.session.prompt({
-                            path: { id: context.sessionID },
-                            query: { directory: workspaceRoot },
-                            body: {
-                                noReply: true,
-                                parts: [subtaskPart]
-                            }
-                        });
-
-                        let subtaskID: string | null = null;
-                        for (let i = 0; i < 20; i++) {
-                            await new Promise(resolve => setTimeout(resolve, 500));
-                            const messagesRes = await input.client.session.messages({
-                                path: { id: context.sessionID },
-                                query: { directory: workspaceRoot, limit: 10 }
-                            });
-                            for (const msg of messagesRes.data || []) {
-                                for (const part of msg.parts || []) {
-                                    if (part.type === "subtask" && part.agent === args.subagent_type && part.description === uniqueLabel) {
-                                        subtaskID = (part as any).sessionID;
-                                        break;
-                                    }
-                                }
-                                if (subtaskID) break;
-                            }
-                            if (subtaskID) break;
-                        }
-
-                        if (!subtaskID) {
-                            throw new Error("Could not retrieve spawned subtask session ID.");
-                        }
-
-                        pendingSubtasks.set(subtaskID, { agent: args.subagent_type, label: uniqueLabel });
-
-                        return `Subagent ${args.subagent_type} spawned (Session ID: ${subtaskID}). Use task_status to check if it's done.`;
-                    } catch (error: any) {
-                        throw error;
-                    }
-                }
-            }),
+                     return `Subagent ${args.subagent_type} spawned (Session ID: ${childSessionID}). Use task_status to check if it's done.`;
+                 }
+             }),
             task_status: tool({
                 description: "Check the completion status of a subagent spawned via task_nowait.",
                 args: {
@@ -778,7 +726,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                         query: { directory: workspaceRoot }
                     });
                     const sessionStatus = statusRes.data?.[args.sessionID];
-                    const info = pendingSubtasks.get(args.sessionID);
+                    const info = spawnedSessions.get(args.sessionID);
                     const agentName = info?.agent || "unknown";
 
                     if (!sessionStatus) {
@@ -786,7 +734,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     }
 
                     if (sessionStatus.type === "idle") {
-                        pendingSubtasks.delete(args.sessionID);
+                        spawnedSessions.delete(args.sessionID);
                         return `Subagent ${agentName} (Session ID: ${args.sessionID}) is DONE. You can now inspect its handoff.md.`;
                     }
 
