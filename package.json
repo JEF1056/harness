@@ -10,7 +10,8 @@
     "opencode.json",
     "harness.json",
     "harness.json.example",
-    "assets"
+    "assets",
+    "map.ts"
   ],
   "scripts": {
     "compile": "tsc",

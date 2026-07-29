@@ -15,6 +15,11 @@
       "description": "Strategic artifact-driven planning mode",
       "argumentHint": "<request>",
       "template": "/plan {{arguments}}"
+    },
+    "map": {
+      "description": "Generate or refresh the living codebase map document",
+      "argumentHint": "[optional scope — e.g. 'src/auth only']",
+      "template": "/map {{arguments}}"
     }
   }
 }

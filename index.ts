@@ -5,6 +5,7 @@ import * as path from "path";
 import { spawn } from "child_process";
 import { QWEN_OPTIMIZED_PLAN_PROMPT } from "./plan.js";
 import { QWEN_OPTIMIZED_REPAIR_PROMPT, fetch_diagnostic_logs } from "./debug.js";
+import { CODEBASE_MAP_PROMPT, build_codebase_map } from "./map.js";
 
 // --- 3. Multi-Instance Awareness: Workspace Lock ---
 
@@ -192,15 +193,19 @@ You are a dispatch-only manager. You MUST NOT write code or solve problems direc
 3. For smaller tasks, run the **Swarm Gate** loop directly:
 
 **The Swarm Gate Loop** (run per milestone):
-a. Spawn an **Explorer** and a **Researcher** concurrently via \`task\` in a single message. Poll both with \`task_status\`. The Explorer maps the codebase; the Researcher investigates external context. Read their \`handoff.md\` files.
-    b. Spawn a **Coder** to implement the fix based on Explorer and Researcher findings. ALWAYS verify their claims first — they can be wrong. Read its \`handoff.md\`.
-c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task\` in a single message. Poll each with \`task_status\` until all are done. Then read all three \`handoff.md\` files.
+**Step 0 — Map Check**: Before spawning agents, check if \`CODEBASE_MAP.md\` exists in the workspace root.
+   - If it exists AND the target scope hasn't changed (compare file mtimes): SKIP the Explorer. Pass the relevant map section directly to the Coder.
+   - If it exists BUT the target scope has changed: spawn a TARGETED Explorer (only scans the changed area, provide ~1.5k token map section).
+   - If it doesn't exist OR is stale: spawn a FULL Explorer as usual.
+a. Spawn an **Explorer** and a **Researcher** concurrently via \`task\` in a single message (only if Step 0 didn't skip). Poll both with \`task_status\`. The Explorer maps the codebase; the Researcher investigates external context. Read their \`handoff.md\` files.
+    b. Spawn a **Coder** to implement. The Coder reads BOTH the Explorer's handoff (if Explorer ran) AND the relevant \`CODEBASE_MAP.md\` section. ALWAYS verify their claims first — they can be wrong. Read its \`handoff.md\`.
+c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task\` in a single message. Poll each with \`task_status\` until all are done. The Reviewer checks that the Coder respected module boundaries from the map. Read all three \`handoff.md\` files.
     f. Evaluate ALL outputs. If ALL pass, mark milestone complete. If ANY fail, loop back to step (a) or (b) as needed.
    g. **Mandatory Integrity**: If the Forensic Auditor reports INTEGRITY VIOLATION, the milestone FAILS unconditionally. Do not override.
 
 4. **Dual Track Architecture**: For greenfield projects, run an "Implementation Track" (builds code) and an "E2E Testing Track" (builds black-box requirement-driven tests).
 5. **Subagent health**: After spawning a subagent, periodically poll with \`task_status\`. If \`progress.md\` is stale and no \`handoff.md\` exists, replace the agent with a fresh instance. If two replacements fail, skip the step or redistribute the work.
-  6. After all milestones are complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. Read its \`handoff.md\`.
+  6. After all milestones are complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. The Cleanup agent also updates \`CODEBASE_MAP.md\` based on file changes. Read its \`handoff.md\`.
   7. When everything is ready, update \`state.json\` to "orchestration_complete" and write your \`handoff.md\`.
 </workflow>
 
@@ -221,15 +226,20 @@ You are an advanced reconnaissance agent. You NEVER write or modify code. Your t
 
 <workflow>
 1. Read the objective provided by the Orchestrator.
-2. Traverse the codebase to map architecture relevant to the objective.
-3. Start at entry points, trace call chains, gather evidence.
-4. Identify all files that need modification. Document current state and edge cases.
-5. Produce a structured analysis report (\`handoff.md\`) recommending a fix strategy.
+2. Check if \`CODEBASE_MAP.md\` exists in the workspace root. If it does, READ IT FIRST — it contains the current codebase map.
+3. The Orchestrator will tell you which SECTION of the map is relevant to your task. Read ONLY that section.
+4. Use the map as a starting point: verify known facts, but also check for changes since the last update.
+5. Traverse the codebase to map architecture relevant to the objective, focusing on areas not covered by the map.
+6. Start at entry points, trace call chains, gather evidence.
+7. Identify all files that need modification. Document current state and edge cases.
+8. If the map section is missing or stale, update it directly.
+9. Produce a structured analysis report (\`handoff.md\`) recommending a fix strategy. Include a "Map Updates" section noting what was verified or changed in the map.
 </workflow>
 
 <constraints>
 - Do NOT attempt to run build commands unless explicitly asked to gather error logs.
 - If multiple Explorers run, results must be synthesized by identifying consensus vs. dissent.
+- Always update CODEBASE_MAP.md if you discover it's stale or incomplete.
 </constraints>
 
 <skill_loading>
@@ -792,6 +802,11 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 argumentHint: "<request>",
                 template: "/plan {{arguments}}"
             };
+            config.command.map = {
+                description: "Generate or refresh the living codebase map document",
+                argumentHint: "[optional scope — e.g. 'src/auth only']",
+                template: "/map {{arguments}}"
+            };
         },
         "command.execute.before": async (cmdInput: any, cmdOutput: any) => {
             const command = cmdInput.command;
@@ -925,10 +940,45 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                     type: "text",
                     text: `${QWEN_OPTIMIZED_REPAIR_PROMPT}\n\n<diagnostic_target>\nTarget ID: ${args}\nLogs:\n${logs}\n</diagnostic_target>\n\nBegin Phase 1: Log Analysis.`
                 });
+            } else if (command === "map") {
+                const scope = args.trim() || null;
+                try {
+                    const mapDoc = build_codebase_map(workspaceRoot, { scope: scope || undefined });
+                    const mapPath = path.join(workspaceRoot, "CODEBASE_MAP.md");
+                    fs.writeFileSync(mapPath, mapDoc, "utf8");
+                    cmdOutput.parts.push({
+                        id: "prt_" + Math.random().toString(36).substring(2),
+                        sessionID: cmdInput.sessionID,
+                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        type: "text",
+                        text: `### 🗺️ Codebase Map Generated\n\n\`CODEBASE_MAP.md\` has been created/updated at the workspace root.\n\nScope: ${scope || "Full project"}\n\nThis map will be automatically referenced by Explorer agents in future milestones to reduce redundant exploration.`
+                    });
+                } catch (error: any) {
+                    cmdOutput.parts.push({
+                        id: "prt_" + Math.random().toString(36).substring(2),
+                        sessionID: cmdInput.sessionID,
+                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        type: "text",
+                        text: `Error generating map: ${error.message}`
+                    });
+                }
             }
         },
         "tool.definition": async (input: any, output: any) => {
             // Remove debug log that breaks TUI
+            output.tools = output.tools || {};
+            output.tools.map = {
+                description: "Generate or refresh the living codebase map. Use this to create CODEBASE_MAP.md which helps Explorer agents skip redundant exploration.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        scope: {
+                            type: "string",
+                            description: "Optional scope to map (e.g., 'src/auth'). If omitted, maps the full project."
+                        }
+                    }
+                }
+            };
         }
     };
 };
