@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-const MAX_TOKENS = 4000;
-const MAX_CHARS = 16000;
+const MAX_TOKENS = 10000;
+const MAX_CHARS = 40000;
 const DEFAULT_EXCLUDES = ["node_modules", ".git", ".agents", "dist", "build", ".next", ".nuxt", ".output", "vendor", "target", "out"];
 export const CODEBASE_MAP_PROMPT = `You are building a living codebase map. Your job is to create or update CODEBASE_MAP.md in the workspace root.
 
@@ -109,8 +109,33 @@ export function build_codebase_map(workspaceRoot, options) {
     doc = prune(doc, { maxTokens: MAX_TOKENS, maxChars: MAX_CHARS });
     return doc;
 }
+function findFilesRecursively(root, excludes, predicate, maxDepth = 5) {
+    const results = [];
+    function scan(dir, currentDepth) {
+        if (currentDepth > maxDepth)
+            return;
+        try {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (excludes.includes(entry.name))
+                    continue;
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    scan(fullPath, currentDepth + 1);
+                }
+                else if (predicate(entry.name)) {
+                    results.push(fullPath);
+                }
+            }
+        }
+        catch { }
+    }
+    scan(root, 0);
+    return results;
+}
 function buildDirectoryTree(root, excludes, scope, depth = 0) {
-    if (depth > 3 && !scope) {
+    // At depth 0, show everything. At deeper levels, be selective.
+    if (depth > 4 && !scope) {
         const entries = fs.readdirSync(root, { withFileTypes: true });
         const dirs = entries.filter(e => e.isDirectory() && !excludes.includes(e.name)).length;
         const files = entries.filter(e => e.isFile()).length;
@@ -118,12 +143,32 @@ function buildDirectoryTree(root, excludes, scope, depth = 0) {
     }
     let tree = "";
     const entries = fs.readdirSync(root, { withFileTypes: true });
+    // Sort: directories first, then files alphabetically
+    entries.sort((a, b) => {
+        if (a.isDirectory() && !b.isDirectory())
+            return -1;
+        if (!a.isDirectory() && b.isDirectory())
+            return 1;
+        return a.name.localeCompare(b.name);
+    });
     for (const entry of entries) {
         if (excludes.includes(entry.name))
             continue;
         if (entry.isDirectory()) {
-            const subTree = buildDirectoryTree(path.join(root, entry.name), excludes, scope, depth + 1);
-            tree += `${"  ".repeat(depth)}├── ${entry.name}/\n${subTree}\n`;
+            // Check if directory has meaningful content (source files or important config)
+            const subEntries = fs.readdirSync(path.join(root, entry.name), { withFileTypes: true });
+            const hasSource = subEntries.some(e => e.isFile() && (e.name.endsWith(".ts") || e.name.endsWith(".js") || e.name.endsWith(".tsx") || e.name.endsWith(".jsx") || e.name.endsWith(".py") || e.name.endsWith(".rs") || e.name.endsWith(".go")));
+            const hasConfig = subEntries.some(e => e.isFile() && ["package.json", "tsconfig.json", "Cargo.toml", "go.mod", "pyproject.toml", "Dockerfile", "Makefile"].includes(e.name));
+            if (depth <= 1 || hasSource || hasConfig || entry.name.match(/^(src|lib|packages|apps|app|components|services|utils|core|shared|api|server|client|web|tools|scripts|mcp|docs|config|infra|test|spec)$/)) {
+                const subTree = buildDirectoryTree(path.join(root, entry.name), excludes, scope, depth + 1);
+                tree += `${"  ".repeat(depth)}├── ${entry.name}/\n${subTree}\n`;
+            }
+            else {
+                const subEntries2 = fs.readdirSync(path.join(root, entry.name), { withFileTypes: true });
+                const fileCount = subEntries2.filter(e => e.isFile()).length;
+                const dirCount = subEntries2.filter(e => e.isDirectory() && !excludes.includes(e.name)).length;
+                tree += `${"  ".repeat(depth)}├── ${entry.name}/ (${fileCount} files, ${dirCount} subdirs)\n`;
+            }
         }
         else {
             tree += `${"  ".repeat(depth)}├── ${entry.name}\n`;
@@ -137,57 +182,117 @@ function identifyKeyFiles(root) {
         "Makefile", "Cargo.toml", "go.mod", "pyproject.toml", "requirements.txt",
         "Gemfile", "build.gradle", "pom.xml", "CMakeLists.txt", "mix.exs",
         ".eslintrc", "prettier.config.js", "vite.config.ts", "webpack.config.js",
-        "jest.config.js", "tailwind.config.js"
+        "jest.config.js", "tailwind.config.js", "README.md", ".gitignore",
+        "renovate.json", "nx.json", "turbo.json", "pnpm-workspace.yaml",
+        "lerna.json", "jest.config.ts", "postcss.config.js", "babel.config.js",
+        "svelte.config.js", "astro.config.mjs", "nuxt.config.ts", "remix.config.js",
+        ".prettierrc", "eslint.config.js", "codecov.yml", ".github",
+        "fly.toml", "render.yaml", "vercel.json", "netlify.toml",
+        "Makefile", "Taskfile.yml", "justfile"
     ];
     const keyFiles = [];
+    const seen = new Set();
+    // Root-level key files
     for (const name of keyNames) {
         const fullPath = path.join(root, name);
-        if (fs.existsSync(fullPath)) {
+        if (fs.existsSync(fullPath) && !seen.has(fullPath)) {
+            seen.add(fullPath);
             keyFiles.push(fullPath);
+        }
+    }
+    // Recursively find additional config files
+    const configPatterns = ["tsconfig*.json", "jsconfig*.json", ".eslintrc*", "prettier*", "vite.config*", "webpack.config*", "jest.config*", "tailwind.config*", "babel.config*", "postcss.config*", "Dockerfile*"];
+    for (const pattern of configPatterns) {
+        const dir = path.dirname(pattern);
+        const base = path.basename(pattern);
+        const files = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => {
+            const regex = new RegExp(`^${base.replace(/\*/g, ".*")}$`);
+            return regex.test(name);
+        }, 2);
+        for (const f of files) {
+            if (!seen.has(f)) {
+                seen.add(f);
+                keyFiles.push(f);
+            }
         }
     }
     return keyFiles;
 }
 function identifyEntryPoints(root) {
     const entryPoints = [];
-    // Check package.json for main/bin
-    const packageJsonPath = path.join(root, "package.json");
-    if (fs.existsSync(packageJsonPath)) {
+    const seen = new Set();
+    const addEntry = (fp) => {
+        if (!seen.has(fp)) {
+            seen.add(fp);
+            entryPoints.push(fp);
+        }
+    };
+    // Check all package.json files for main/bin/exports
+    const pkgFiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "package.json");
+    for (const pkgPath of pkgFiles) {
         try {
-            const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            const pkgDir = path.dirname(pkgPath);
             if (pkg.main)
-                entryPoints.push(path.join(root, pkg.main));
+                addEntry(path.join(pkgDir, pkg.main));
             if (pkg.bin) {
                 if (typeof pkg.bin === "string") {
-                    entryPoints.push(path.join(root, pkg.bin));
+                    addEntry(path.join(pkgDir, pkg.bin));
                 }
                 else {
                     for (const name of Object.keys(pkg.bin)) {
-                        entryPoints.push(path.join(root, pkg.bin[name]));
+                        addEntry(path.join(pkgDir, pkg.bin[name]));
                     }
                 }
             }
             if (pkg.exports) {
                 if (typeof pkg.exports === "string") {
-                    entryPoints.push(path.join(root, pkg.exports));
+                    addEntry(path.join(pkgDir, pkg.exports));
+                }
+            }
+            if (pkg.scripts) {
+                const startScript = pkg.scripts.start || pkg.scripts.dev || pkg.scripts.devserver;
+                if (startScript) {
+                    // Extract file from start script (e.g., "next dev" -> don't add, but "ts-node src/server.ts" -> add)
+                    const tsMatch = startScript.match(/(?:ts-node|tsx|node)\s+([^\s]+)/);
+                    if (tsMatch)
+                        addEntry(path.join(pkgDir, tsMatch[1]));
                 }
             }
         }
         catch { }
     }
-    // Check for common entry files
-    const commonEntries = ["index.ts", "index.js", "main.ts", "main.js", "app.ts", "app.js", "server.ts", "server.js"];
-    for (const entry of commonEntries) {
-        const fullPath = path.join(root, entry);
-        if (fs.existsSync(fullPath)) {
-            entryPoints.push(fullPath);
+    // Check for common entry files at all depths (up to 3 levels)
+    const commonEntries = ["index.ts", "index.js", "main.ts", "main.js", "app.ts", "app.js", "server.ts", "server.js", "cli.ts", "cli.js", "bootstrap.ts", "bootstrap.js"];
+    const entryFiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => commonEntries.includes(name), 3);
+    for (const ef of entryFiles) {
+        addEntry(ef);
+    }
+    // Check for Docker entrypoints
+    const dockerfiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "Dockerfile", 3);
+    for (const df of dockerfiles) {
+        addEntry(df);
+    }
+    // Check for bin/ directories in packages
+    for (const pkgPath of pkgFiles) {
+        const pkgDir = path.dirname(pkgPath);
+        const binDir = path.join(pkgDir, "bin");
+        if (fs.existsSync(binDir) && fs.statSync(binDir).isDirectory()) {
+            try {
+                const binFiles = fs.readdirSync(binDir);
+                for (const bf of binFiles) {
+                    addEntry(path.join(binDir, bf));
+                }
+            }
+            catch { }
         }
     }
     return entryPoints;
 }
 function identifyModules(root) {
     const modules = [];
-    // Simple heuristic: look for directories with package.json or index files
+    const seen = new Set();
+    // Level 1: Top-level directories with package.json (packages/modules)
     try {
         const entries = fs.readdirSync(root, { withFileTypes: true });
         for (const entry of entries) {
@@ -195,76 +300,276 @@ function identifyModules(root) {
                 continue;
             const modulePath = path.join(root, entry.name);
             const hasPackageJson = fs.existsSync(path.join(modulePath, "package.json"));
+            const hasCargoToml = fs.existsSync(path.join(modulePath, "Cargo.toml"));
+            const hasGoMod = fs.existsSync(path.join(modulePath, "go.mod"));
+            const hasPyProject = fs.existsSync(path.join(modulePath, "pyproject.toml"));
             const hasIndex = fs.existsSync(path.join(modulePath, "index.ts")) || fs.existsSync(path.join(modulePath, "index.js"));
-            if (hasPackageJson || hasIndex) {
-                const keyFiles = [];
-                const files = fs.readdirSync(modulePath, { withFileTypes: true });
-                for (const file of files.slice(0, 5)) {
-                    if (file.isFile() && (file.name.endsWith(".ts") || file.name.endsWith(".js"))) {
-                        keyFiles.push(path.join(modulePath, file.name));
+            if (hasPackageJson || hasCargoToml || hasGoMod || hasPyProject || hasIndex) {
+                if (!seen.has(entry.name)) {
+                    seen.add(entry.name);
+                    const keyFiles = [];
+                    const langFiles = findFilesRecursively(modulePath, DEFAULT_EXCLUDES, (name) => name.endsWith(".ts") || name.endsWith(".js") || name.endsWith(".tsx") || name.endsWith(".jsx") || name.endsWith(".py") || name.endsWith(".rs") || name.endsWith(".go"), 2);
+                    for (const f of langFiles.slice(0, 8)) {
+                        keyFiles.push(f);
                     }
+                    // Infer purpose from directory name and contents
+                    let purpose = inferModulePurpose(entry.name, modulePath);
+                    // Find internal dependencies from package.json
+                    const deps = [];
+                    if (hasPackageJson) {
+                        try {
+                            const pkg = JSON.parse(fs.readFileSync(path.join(modulePath, "package.json"), "utf8"));
+                            const workspaceDeps = Object.keys(pkg.dependencies || {}).filter(d => d.startsWith("@") || /^[a-z]/i.test(d));
+                            deps.push(...workspaceDeps.slice(0, 5));
+                        }
+                        catch { }
+                    }
+                    modules.push({
+                        name: entry.name,
+                        purpose,
+                        keyFiles,
+                        dependencies: deps
+                    });
+                }
+            }
+        }
+    }
+    catch { }
+    // Level 2: Directories that look like feature modules (src/, lib/, packages/, apps/)
+    const featureDirs = ["src", "lib", "packages", "apps", "app", "apps", "components", "services", "utils", "core", "shared", "common", "api", "server", "client", "web", "mobile", "cli", "bin", "tools", "scripts", "tests", "test", "spec", "docs", "config", "configs", "infra", "deploy", "ops", "mcp", "mcp-server"];
+    for (const featureDir of featureDirs) {
+        const featurePath = path.join(root, featureDir);
+        if (fs.existsSync(featurePath) && fs.statSync(featurePath).isDirectory()) {
+            if (!seen.has(featureDir)) {
+                seen.add(featureDir);
+                const keyFiles = [];
+                const langFiles = findFilesRecursively(featurePath, DEFAULT_EXCLUDES, (name) => name.endsWith(".ts") || name.endsWith(".js") || name.endsWith(".tsx") || name.endsWith(".jsx") || name.endsWith(".py") || name.endsWith(".rs") || name.endsWith(".go"), 2);
+                for (const f of langFiles.slice(0, 5)) {
+                    keyFiles.push(f);
                 }
                 modules.push({
-                    name: entry.name,
-                    purpose: `Module in ${entry.name}/ directory`,
+                    name: featureDir,
+                    purpose: inferModulePurpose(featureDir, featurePath),
                     keyFiles,
                     dependencies: []
                 });
             }
         }
     }
-    catch { }
     return modules;
 }
+function inferModulePurpose(dirName, dirPath) {
+    const name = dirName.toLowerCase();
+    // Heuristic purpose inference based on directory name
+    const purposeMap = {
+        "src": "Source code",
+        "lib": "Library code",
+        "packages": "Monorepo packages",
+        "apps": "Application entry points",
+        "app": "Main application",
+        "components": "UI components",
+        "services": "Business logic services",
+        "utils": "Utility functions",
+        "core": "Core functionality",
+        "shared": "Shared code",
+        "common": "Common utilities",
+        "api": "API endpoints and handlers",
+        "server": "Server implementation",
+        "client": "Client-side code",
+        "web": "Web frontend",
+        "mobile": "Mobile app code",
+        "cli": "Command-line interface",
+        "bin": "Executable binaries",
+        "tools": "Development tools",
+        "scripts": "Build/automation scripts",
+        "tests": "Test files",
+        "docs": "Documentation",
+        "config": "Configuration files",
+        "infra": "Infrastructure code",
+        "deploy": "Deployment configs",
+        "mcp": "MCP server implementation",
+        "mcp-server": "MCP server implementation",
+    };
+    if (purposeMap[name])
+        return purposeMap[name];
+    // Check for README or package.json description
+    try {
+        const readme = path.join(dirPath, "README.md");
+        if (fs.existsSync(readme)) {
+            const content = fs.readFileSync(readme, "utf8").split("\n").slice(0, 5).join(" ");
+            if (content.trim().length > 0)
+                return `Module: ${content.trim().substring(0, 80)}`;
+        }
+    }
+    catch { }
+    try {
+        const pkgPath = path.join(dirPath, "package.json");
+        if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            if (pkg.description)
+                return `Module: ${pkg.description}`;
+        }
+    }
+    catch { }
+    return `Module in ${dirName}/ directory`;
+}
 function detectLanguage(root) {
-    if (fs.existsSync(path.join(root, "package.json")))
-        return "TypeScript/JavaScript";
-    if (fs.existsSync(path.join(root, "Cargo.toml")))
-        return "Rust";
-    if (fs.existsSync(path.join(root, "go.mod")))
-        return "Go";
-    if (fs.existsSync(path.join(root, "pyproject.toml")) || fs.existsSync(path.join(root, "requirements.txt")))
-        return "Python";
-    if (fs.existsSync(path.join(root, "Gemfile")))
-        return "Ruby";
-    if (fs.existsSync(path.join(root, "build.gradle")) || fs.existsSync(path.join(root, "pom.xml")))
-        return "Java/Kotlin";
-    return "Unknown";
+    const langScores = {};
+    // Weight by proximity to root (closer files are more significant)
+    const addScore = (file, lang) => {
+        const rel = path.relative(root, file);
+        const depth = rel.split(path.sep).length;
+        const weight = Math.max(1, 10 - depth); // closer = higher weight
+        langScores[lang] = (langScores[lang] || 0) + weight;
+    };
+    findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => {
+        if (name === "package.json")
+            addScore(path.join(root, name), "TypeScript/JavaScript");
+        if (name === "Cargo.toml")
+            addScore(path.join(root, name), "Rust");
+        if (name === "go.mod")
+            addScore(path.join(root, name), "Go");
+        if (name === "pyproject.toml" || name === "requirements.txt" || name === "setup.py" || name === "setup.cfg")
+            addScore(path.join(root, name), "Python");
+        if (name === "Gemfile")
+            addScore(path.join(root, name), "Ruby");
+        if (name === "build.gradle" || name === "pom.xml")
+            addScore(path.join(root, name), "Java/Kotlin");
+        if (name === "mix.exs")
+            addScore(path.join(root, name), "Elixir");
+        if (name === "Dockerfile" || name === "docker-compose.yml")
+            addScore(path.join(root, name), "Containerized");
+        return false;
+    });
+    // Also check for source file extensions as a fallback signal
+    const tsFiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name.endsWith(".ts") || name.endsWith(".tsx")).length;
+    const jsFiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name.endsWith(".js") || name.endsWith(".jsx")).length;
+    const pyFiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name.endsWith(".py")).length;
+    const rsFiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name.endsWith(".rs")).length;
+    const goFiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name.endsWith(".go")).length;
+    if (tsFiles + jsFiles > 0)
+        langScores["TypeScript/JavaScript"] = (langScores["TypeScript/JavaScript"] || 0) + Math.min(tsFiles + jsFiles, 100);
+    if (pyFiles > 0)
+        langScores["Python"] = (langScores["Python"] || 0) + Math.min(pyFiles, 100);
+    if (rsFiles > 0)
+        langScores["Rust"] = (langScores["Rust"] || 0) + Math.min(rsFiles, 100);
+    if (goFiles > 0)
+        langScores["Go"] = (langScores["Go"] || 0) + Math.min(goFiles, 100);
+    // Return the language with the highest score
+    let bestLang = "Unknown";
+    let bestScore = 0;
+    for (const [lang, score] of Object.entries(langScores)) {
+        if (score > bestScore) {
+            bestScore = score;
+            bestLang = lang;
+        }
+    }
+    return bestLang;
 }
 function detectFramework(root) {
-    if (fs.existsSync(path.join(root, "package.json"))) {
+    const frameworkScores = {};
+    const addFramework = (fw, score) => {
+        frameworkScores[fw] = (frameworkScores[fw] || 0) + score;
+    };
+    // Scan all package.json files for JS/TS frameworks
+    const pkgFiles = findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "package.json");
+    for (const pkgPath of pkgFiles) {
         try {
-            const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
             const deps = { ...pkg.dependencies || {}, ...pkg.devDependencies || {} };
+            const rel = path.relative(root, pkgPath);
+            const weight = Math.max(1, 10 - rel.split(path.sep).length);
             if (deps["next"])
-                return "Next.js";
+                addFramework("Next.js", weight * 3);
             if (deps["react"])
-                return "React";
+                addFramework("React", weight * 2);
             if (deps["vue"])
-                return "Vue.js";
+                addFramework("Vue.js", weight * 2);
             if (deps["svelte"])
-                return "Svelte";
+                addFramework("Svelte", weight * 2);
             if (deps["express"])
-                return "Express.js";
+                addFramework("Express.js", weight * 2);
             if (deps["fastify"])
-                return "Fastify";
+                addFramework("Fastify", weight * 2);
             if (deps["nuxt"])
-                return "Nuxt.js";
+                addFramework("Nuxt.js", weight * 2);
+            if (deps["tailwindcss"])
+                addFramework("Tailwind CSS", weight);
+            if (deps["typescript"])
+                addFramework("TypeScript", weight);
         }
         catch { }
     }
-    return "Unknown";
+    // Check for Docker-based frameworks
+    if (fs.existsSync(path.join(root, "docker-compose.yml")) || fs.existsSync(path.join(root, "docker-compose.yaml"))) {
+        addFramework("Docker", 5);
+    }
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "Dockerfile").length > 0) {
+        addFramework("Docker", 3);
+    }
+    // ML/DL frameworks
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "pyproject.toml" || name === "requirements.txt").length > 0) {
+        for (const reqFile of findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "requirements.txt")) {
+            try {
+                const content = fs.readFileSync(reqFile, "utf8");
+                if (content.includes("torch") || content.includes("pytorch"))
+                    addFramework("PyTorch", 3);
+                if (content.includes("tensorflow") || content.includes("tf"))
+                    addFramework("TensorFlow", 3);
+                if (content.includes("transformers"))
+                    addFramework("HuggingFace Transformers", 2);
+                if (content.includes("langchain"))
+                    addFramework("LangChain", 2);
+            }
+            catch { }
+        }
+    }
+    // Return the framework with the highest score
+    let bestFramework = "Unknown";
+    let bestScore = 0;
+    for (const [fw, score] of Object.entries(frameworkScores)) {
+        if (score > bestScore) {
+            bestScore = score;
+            bestFramework = fw;
+        }
+    }
+    return bestScore > 0 ? bestFramework : "Unknown";
 }
 function detectBuildSystem(root) {
-    if (fs.existsSync(path.join(root, "package.json")))
-        return "npm/yarn/pnpm";
-    if (fs.existsSync(path.join(root, "Makefile")))
-        return "Make";
-    if (fs.existsSync(path.join(root, "build.gradle")))
-        return "Gradle";
-    if (fs.existsSync(path.join(root, "CMakeLists.txt")))
-        return "CMake";
-    return "Unknown";
+    const buildSystems = [];
+    // Check for any package.json (npm/yarn/pnpm)
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "package.json").length > 0) {
+        buildSystems.push("npm/yarn/pnpm");
+    }
+    // Check for Makefile
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "Makefile").length > 0) {
+        buildSystems.push("Make");
+    }
+    // Check for Gradle
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "build.gradle" || name === "build.gradle.kts").length > 0) {
+        buildSystems.push("Gradle");
+    }
+    // Check for CMake
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "CMakeLists.txt").length > 0) {
+        buildSystems.push("CMake");
+    }
+    // Check for Cargo (Rust)
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "Cargo.toml").length > 0) {
+        buildSystems.push("Cargo/crates.io");
+    }
+    // Check for Go modules
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "go.mod").length > 0) {
+        buildSystems.push("Go modules");
+    }
+    // Check for Docker
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "Dockerfile" || name === "docker-compose.yml" || name === "docker-compose.yaml").length > 0) {
+        buildSystems.push("Docker");
+    }
+    // Check for pip/Python
+    if (findFilesRecursively(root, DEFAULT_EXCLUDES, (name) => name === "pyproject.toml" || name === "setup.py" || name === "requirements.txt").length > 0) {
+        buildSystems.push("pip/venv");
+    }
+    return buildSystems.length > 0 ? buildSystems.join(", ") : "Unknown";
 }
 function describeArchitecture(root, modules) {
     if (modules.length === 0)

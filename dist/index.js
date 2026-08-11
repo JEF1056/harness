@@ -159,6 +159,13 @@ c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task
 
  **Phase 4 — Victory Audit**:
  8. The project is NOT finished until the Victory Auditor issues "VICTORY CONFIRMED". Spawn a **Victory Auditor** using the blocking \`task\` tool. If the Victory Auditor issues "VICTORY REJECTED", loop back to Phase 3 — always run Cleanup again before re-spawning the Victory Auditor.
+
+**Swarm Gate Continuation Protocol** (CRITICAL — DO NOT SKIP):
+- You operate in phases. Each phase = one agent spawn, wait for completion, read its handoff, then spawn the next phase. DO NOT explain what you are about to do. Issue the next \`task\` call IMMEDIATELY.
+- After reading handoff files from ANY step, your ONLY action must be to spawn the next agent(s) in the swarm gate sequence. Do NOT pause, do NOT summarize, do NOT go idle until the entire milestone is complete or Reviewer returns REQUEST_CHANGES.
+- If a step spawns Reviewer + Challenger + Auditor (step c), wait for all three to complete. Once their handoffs are read, immediately either loop back to step (b) (if REQUEST_CHANGES) or proceed to evaluation (step f) / next milestone.
+- NEVER stop the Swarm Gate after reading a single step's handoff. Keep chaining \`task\` calls through the full gate loop until the milestone is done.
+- If you have multiple independent milestones, spawn ALL sub-Orchestrators first (concurrently), then proceed to the next milestone only after the current one is fully complete (not just Explorer/Researcher done).
 </workflow>
 
 <constraints>
@@ -200,7 +207,13 @@ c. Spawn a **Reviewer**, **Challenger**, and **Auditor** concurrently via \`task
 4. **Dual Track Architecture**: For greenfield projects, run an "Implementation Track" (builds code) and an "E2E Testing Track" (builds black-box requirement-driven tests).
 5. **Subagent health**: After spawning a subagent, periodically poll with \`task_status\`. If \`progress.md\` is stale and no \`handoff.md\` exists, replace the agent with a fresh instance. If two replacements fail, skip the step or redistribute the work.
   6. After all milestones are complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. The Cleanup agent also updates \`CODEBASE_MAP.md\` based on file changes. Read its \`handoff.md\`.
-  7. When everything is ready, update \`state.json\` to "orchestration_complete" and write your \`handoff.md\`.
+   7. When everything is ready, update \`state.json\` to "orchestration_complete" and write your \`handoff.md\`.
+
+**Swarm Gate Continuation Protocol** (CRITICAL — DO NOT SKIP):
+- You operate in phases. Each phase = spawn agents, wait for completion, read handoff, then spawn next phase. DO NOT explain what you are about to do. Issue the next \`task\` call IMMEDIATELY.
+- After reading handoff files from ANY step, your ONLY action must be to spawn the next agent(s) in the swarm gate sequence. Do NOT pause, do NOT summarize, do NOT go idle until the entire milestone is complete or Reviewer returns REQUEST_CHANGES.
+- If Reviewer verdict is REQUEST_CHANGES, loop back to step (b) — spawn a fresh Coder that reads both the original Explorer handoff AND the current Coder handoff.
+- NEVER stop the Swarm Gate after reading a single step's handoff. Keep chaining \`task\` calls through the full gate loop until the milestone is done.
 </workflow>
 
 <constraints>
@@ -443,6 +456,8 @@ export const server = async (input, options) => {
     const activeWatchers = new Map();
     let rootWatcher = null;
     let heartbeatInterval = null;
+    // Helper to generate short random IDs
+    const genId = (prefix) => prefix + crypto.randomBytes(8).toString('hex');
     // Set to track agents that have already been warned about (deduplication, persisted to disk)
     const WARNED_FILE = path.join(agentsDir, '.warned');
     const loadWarnedAgents = () => {
@@ -804,14 +819,14 @@ export const server = async (input, options) => {
                         fs.mkdirSync(agentsDir, { recursive: true });
                     }
                     // Generate unique session ID for this invocation
-                    const sessionId = crypto.randomUUID();
+                    const sessionId = "ses-" + crypto.randomUUID();
                     // Acquire workspace lock (race-free via exclusive file creation)
                     const lockResult = acquireWorkspaceLock(agentsDir, sessionId);
                     if (!lockResult.locked) {
                         cmdOutput.parts.push({
-                            id: "prt_" + Math.random().toString(36).substring(2),
+                            id: genId("prt_"),
                             sessionID: cmdInput.sessionID,
-                            messageID: "msg_" + Math.random().toString(36).substring(2),
+                            messageID: genId("msg_"),
                             type: "text",
                             text: `### ⚠️ Workspace Locked\n\nThe workspace is already in use by another Sentinel (session: ${lockResult.owner}).\n\nOnly one Sentinel can operate per workspace at a time. Wait for the current Sentinel to complete, or manually remove \`.agents/lock.json\` to force-release the lock (useful if the previous Sentinel crashed).\n\nTo check the lock status, read \`.agents/lock.json\`.`
                         });
@@ -865,18 +880,18 @@ export const server = async (input, options) => {
                         // Do not console.error here to prevent TUI breakage
                     });
                     cmdOutput.parts.push({
-                        id: "prt_" + Math.random().toString(36).substring(2),
+                        id: genId("prt_"),
                         sessionID: cmdInput.sessionID,
-                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        messageID: genId("msg_"),
                         type: "text",
                         text: `### 🤖 Harness Swarm (Parallel Mode) Initialized\n\n**Session ID: ${sessionId}**\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Your state is under \`.agents/sessions/${sessionId}/\`. Spawn agents concurrently by calling \`task\` multiple times in a single message. Use \`task_status\` to poll. Sequential phases use single \`task\` calls.`
                     });
                 }
                 catch (error) {
                     cmdOutput.parts.push({
-                        id: "prt_" + Math.random().toString(36).substring(2),
+                        id: genId("prt_"),
                         sessionID: cmdInput.sessionID,
-                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        messageID: genId("msg_"),
                         type: "text",
                         text: `Error initializing swarm: ${error.message}`
                     });
@@ -890,18 +905,18 @@ export const server = async (input, options) => {
                 }
                 catch (e) {
                     cmdOutput.parts.push({
-                        id: "prt_" + Math.random().toString(36).substring(2),
+                        id: genId("prt_"),
                         sessionID: cmdInput.sessionID,
-                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        messageID: genId("msg_"),
                         type: "text",
                         text: `Error creating plans directory: ${e.message}`
                     });
                     return;
                 }
                 cmdOutput.parts.push({
-                    id: "prt_" + Math.random().toString(36).substring(2),
+                    id: genId("prt_"),
                     sessionID: cmdInput.sessionID,
-                    messageID: "msg_" + Math.random().toString(36).substring(2),
+                    messageID: genId("msg_"),
                     type: "text",
                     text: `${QWEN_OPTIMIZED_PLAN_PROMPT}\n\n<plans_directory>${plansDir}</plans_directory>\n\n<user_request>\n${args}\n</user_request>`
                 });
@@ -909,9 +924,9 @@ export const server = async (input, options) => {
             else if (command === "debug") {
                 const logs = await fetch_diagnostic_logs(args);
                 cmdOutput.parts.push({
-                    id: "prt_" + Math.random().toString(36).substring(2),
+                    id: genId("prt_"),
                     sessionID: cmdInput.sessionID,
-                    messageID: "msg_" + Math.random().toString(36).substring(2),
+                    messageID: genId("msg_"),
                     type: "text",
                     text: `${QWEN_OPTIMIZED_REPAIR_PROMPT}\n\n<diagnostic_target>\nTarget ID: ${args}\nLogs:\n${logs}\n</diagnostic_target>\n\nBegin Phase 1: Log Analysis.`
                 });
@@ -922,19 +937,33 @@ export const server = async (input, options) => {
                     const mapDoc = build_codebase_map(workspaceRoot, { scope: scope || undefined });
                     const mapPath = path.join(workspaceRoot, "CODEBASE_MAP.md");
                     fs.writeFileSync(mapPath, mapDoc, "utf8");
+                    // Launch Explorer agents to validate and enrich the generated map
+                    const explorerPrompt = getFullAgentPrompt("Explorer") + `\n\nYou have just run the /map command which generated CODEBASE_MAP.md at ${mapPath}. Your job is to verify the map is accurate and complete by exploring the codebase. Focus on the ${scope || "full project"} scope. Read the generated map, then traverse the codebase to verify its accuracy. Update the map if you find errors or omissions. Write a handoff.md summarizing your findings.`;
+                    await input.client.session.prompt({
+                        path: { id: cmdInput.sessionID },
+                        body: {
+                            noReply: true,
+                            parts: [{
+                                    type: "text",
+                                    text: explorerPrompt
+                                }]
+                        }
+                    }).catch(err => {
+                        // Non-fatal — map was still generated
+                    });
                     cmdOutput.parts.push({
-                        id: "prt_" + Math.random().toString(36).substring(2),
+                        id: genId("prt_"),
                         sessionID: cmdInput.sessionID,
-                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        messageID: genId("msg_"),
                         type: "text",
-                        text: `### 🗺️ Codebase Map Generated\n\n\`CODEBASE_MAP.md\` has been created/updated at the workspace root.\n\nScope: ${scope || "Full project"}\n\nThis map will be automatically referenced by Explorer agents in future milestones to reduce redundant exploration.`
+                        text: `### 🗺️ Codebase Map Generated & Explorer Launched\n\n\`CODEBASE_MAP.md\` has been created/updated at the workspace root.\n\nScope: ${scope || "Full project"}\n\nAn Explorer agent has been spawned to validate and enrich the map. The Explorer will verify accuracy, update stale sections, and write a handoff.md with findings.`
                     });
                 }
                 catch (error) {
                     cmdOutput.parts.push({
-                        id: "prt_" + Math.random().toString(36).substring(2),
+                        id: genId("prt_"),
                         sessionID: cmdInput.sessionID,
-                        messageID: "msg_" + Math.random().toString(36).substring(2),
+                        messageID: genId("msg_"),
                         type: "text",
                         text: `Error generating map: ${error.message}`
                     });
