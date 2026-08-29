@@ -6,31 +6,34 @@ Listed in [awesome-opencode](https://github.com/awesome-opencode/awesome-opencod
 
 ## Features
 
-- **Parallel swarm execution**: 2-3 agents run concurrently at each pipeline stage via native opencode `task` (multiple calls per message) for maximum throughput
-- **Swarm Gate pipeline**: Diamond workflow with concurrent Explorer/Researcher and concurrent Reviewer/Challenger/Auditor phases
+- **Sequential swarm execution**: Agents run one at a time via native opencode `task` (single call per message) — optimized for single-GPU environments
+- **Swarm Gate pipeline**: Diamond workflow with Explorer → Coder → Reviewer/Challenger phases
+- **Integrity modes**: Development, demo, and benchmark modes with escalating anti-cheating enforcement
 - **Escalation ladder**: Retry → Replace → Skip → Redistribute → Degrade for stalled agents
+- **Succession protocol**: At 8+ spawns, the Sentinel delegates to a fresh subagent to avoid context bloat
+- **Single-GPU optimized**: Sequential execution model — one task at a time, no concurrent spawning
 - **Real-time monitoring**: File watchers + heartbeat polling + TUI toast notifications
 - **Artifact-driven handoffs**: Structured 5-section `handoff.md` files with forensic verification
+- **10 methodology playbooks**: Skills synced to workspace and injected into agent prompts
 - **System prompt protection**: Decoy rules prevent prompt leakage and injection attacks
 - **Workspace locking**: Race-free exclusive file locking prevents concurrent Sentinel operations
 - **Lifecycle management**: `dispose` hook cleans up watchers, heartbeat, and locks; `tool.definition` hook silences debug output
 
 ## Architecture
 
-Harness runs an **11-agent parallel swarm** orchestrated by the Sentinel:
+Harness runs a **10-agent swarm** orchestrated by the Sentinel:
 
 | Agent | Role |
 |---|---|
 | Sentinel | Macro-supervisor — runs on the main thread, manages the swarm, mode: `all`, defaultConcurrency: 5, granted `ask_question` tool |
 | Orchestrator | Dispatch-only manager — decomposes tasks into milestones, mode: `subagent`, defaultConcurrency: 5 |
-| Explorer | Read-only scout — maps codebase architecture, mode: `subagent` |
+| Explorer | Read-only scout — maps codebase architecture AND external research, mode: `subagent` |
 | Coder | Armed worker — implements changes, verifies builds, mode: `subagent` |
-| Reviewer | Adversarial code reviewer — checks correctness and quality, mode: `subagent` |
+| Reviewer | Adversarial code reviewer + integrity gate — checks correctness, quality, and anti-cheating, mode: `subagent` |
 | Challenger | Bug hunter — writes adversarial stress tests, mode: `subagent` |
-| Auditor | Anti-cheating enforcer — verifies authentic implementation, mode: `subagent` |
+| Auditor | Forensic anti-cheating enforcer — binary veto, mode: `subagent` |
 | VictoryAuditor | Final gatekeeper — independent verification, issues VICTORY CONFIRMED or VICTORY REJECTED, mode: `subagent` |
 | Debugger | Log-driven diagnostic — summoned on failure, mode: `subagent` |
-| Researcher | Web-aware investigator, runs parallel to Explorer, mode: `subagent` |
 | Cleanup | Artifact purge — removes adversarial tests before commit, mode: `subagent` |
 
 ### The Swarm Gate Loop
@@ -38,29 +41,41 @@ Harness runs an **11-agent parallel swarm** orchestrated by the Sentinel:
 Each milestone passes through a diamond pipeline:
 
 ```
-   ┌────────────┐        ┌────────────┐
-   │  Explorer  │        │ Researcher  │
-   └────┬───────┘        └────┬───────┘
-        │                      │
-        └──────────┬───────────┘
-                   ▼
-              ┌─────────┐
-              │  Coder  │
-              └────┬────┘
-                   │
-   ┌───────────────┼───────────────┐
-   ▼               ▼               ▼
-[Reviewer]    [Challenger]    [Auditor]
-   │               │               │
-   └───────────┬───┴───────────────┘
-               ▼
-       [Victory Audit]
+    ┌────────────┐
+    │  Explorer  │
+    └────┬───────┘
+         ▼
+    ┌─────────┐
+    │  Coder  │
+    └────┬────┘
+         │
+    ┌────┴────┐
+    ▼         ▼
+[Reviewer] [Challenger]
+    │         │
+    └────┬────┘
+         ▼
+  [Victory Audit]
 ```
 
-- Explorer and Researcher run **concurrently** — Explorer maps the codebase, Researcher investigates external context
-- Reviewer, Challenger, and Auditor run **concurrently** via multiple `task` calls in a single message
-- Forensic Auditor verdict is mandatory — INTEGRITY VIOLATION unconditionally fails the milestone
+- Explorer handles both codebase mapping and external research in one pass
+- Reviewer handles correctness, quality, AND integrity scanning in one pass
+- Challenger runs adversarial stress tests after Reviewer (sequential)
+- Auditor (separate) only for high-stakes: benchmark/production integrity modes
+- INTEGRITY VIOLATION unconditionally fails the milestone
 - Dual Track Architecture for greenfield projects: Implementation Track then E2E Testing Track
+
+### Integrity Modes
+
+| Mode | Enforcement | When |
+|---|---|---|
+| development | Standard review, no special constraints | Default for everyday work |
+| demo | Moderate — no copying from open source, no pre-built libraries for core logic | Capability showcases |
+| benchmark | Maximum — no external scripts, no reading test source, no pre-built libraries | Competitive evals |
+
+### Succession Protocol
+
+At 8+ spawns, the Sentinel delegates remaining work to a fresh subagent to avoid context bloat. The successor receives the full session state via `state.json` and `handoff.md` files.
 
 ### Real-Time Monitoring
 
@@ -112,7 +127,7 @@ The plugin creates the following files automatically:
 |---|---|---|
 | `ORIGINAL_REQUEST.md` | Workspace root | Records the user's raw objective |
 | `prompt_draft.md` | Workspace root | Sentinel-compiled prompt (deleted and recreated per run) |
-| `state.json` | `.agents/` | Swarm state (`status`, `objective` fields) |
+| `state.json` | `.agents/` | Swarm state (`status`, `objective`, `integrityMode`, `spawnCount` fields) |
 | `.warned` | `.agents/` | Deduplication set for heartbeat warnings |
 | `BRIEFING.md` | Each agent folder | Append-only identity, constraints, and workflow |
 | `progress.md` | Each agent folder | Heartbeat (`Last visited` timestamp) and status |
@@ -123,7 +138,7 @@ The plugin creates the following files automatically:
 
 ### `/harness [optional instructions]`
 
-Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask). Uses multiple `task` calls per message for concurrent sub-goals, sequential `task` calls for dependent phases, and `task_status` for polling.
+Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask). Executes ONE task at a time — optimized for single-GPU environments. Uses exactly one `task` call per message and `task_status` for polling before spawning the next agent.
 
 **Behavior**:
 - Creates `.agents/` directory and generates a unique session ID
@@ -160,7 +175,7 @@ Strategic artifact-driven planning. Produces a structured plan file in `.agents/
 ### Prerequisites
 
 - [OpenCode](https://opencode.ai)
-- `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` — required for parallel subagent spawning via native `task`. Add to your `~/.bashrc` or set before launching OpenCode.
+- `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` — required for subagent spawning via native `task`. Add to your `~/.bashrc` or set before launching OpenCode.
 
 ### Plugin Caching
 
@@ -168,13 +183,20 @@ Plugins are cached in `~/.cache/opencode/packages/`. The harness package ships p
 
 ### Included Skills
 
-Three skill files ship with the plugin in `assets/skills/`:
+Ten methodology playbooks ship with the plugin in `assets/skills/`:
 
-- **greenfield-development** — Methodology for building from scratch
-- **test-coverage-audit** — Adversarial test analysis methodology
 - **software-engineering** — Guidelines for modifying existing code
+- **greenfield-development** — Methodology for building from scratch
+- **competitive-programming** — Algorithmic problem-solving methodology
+- **test-coverage-audit** — Adversarial test analysis methodology
+- **formal-verification** — Formal proof and verification methodology
+- **ml-engineering** — Machine learning pipeline methodology
+- **research-reasoning** — Research and reasoning methodology
+- **search-candidate-management** — Search and candidate management methodology
+- **solution-stress-testing** — Stress testing and edge case methodology
+- **proof-rigor-verification** — Proof rigor and verification methodology
 
-Agents can load these skills via the skill registration protocol at runtime.
+Skills are synced to `.agents/skills/` at command init and a skill catalog table is injected into every agent prompt. Agents can load these skills via the skill registration protocol at runtime.
 
 ### Add to opencode.json
 
@@ -186,7 +208,7 @@ Agents can load these skills via the skill registration protocol at runtime.
 
 Append `#main` to always fetch the latest `main` branch (avoids package manager cache). For local development, use an absolute path instead.
 
-Restart OpenCode. The `/harness`, `/debug`, and `/plan` commands auto-populate in the `/` command menu.
+Restart OpenCode. The `/harness`, `/debug`, `/plan`, and `/map` commands auto-populate in the `/` command menu.
 
 ## Configuration
 
@@ -201,9 +223,9 @@ Copy `harness.json.example` to `harness.json` and edit:
 ```json
 {
   "models": {
-    "Coder": "anthropic/claude-sonnet-4-20250514",
-    "Reviewer": "anthropic/claude-haiku-4-20250514",
-    "Challenger": "anthropic/claude-haiku-4-20250514"
+    "Coder": "qwen/qwen3.8-27b",
+    "Reviewer": "qwen/qwen3.8-27b",
+    "Challenger": "qwen/qwen3.8-27b"
   }
 }
 ```
@@ -222,8 +244,8 @@ Priority: `harness.json` → `opencode.json` → per-agent env var → global en
 
 Example:
 ```bash
-export HARNESS_SUBAGENT_MODEL="anthropic/claude-haiku-4-20250514"
-export HARNESS_CODER_MODEL="anthropic/claude-sonnet-4-20250514"
+export HARNESS_SUBAGENT_MODEL="qwen/qwen3.8-27b"
+export HARNESS_CODER_MODEL="qwen/qwen3.8-27b"
 ```
 
 **Method 3: `opencode.json`**
@@ -231,8 +253,8 @@ export HARNESS_CODER_MODEL="anthropic/claude-sonnet-4-20250514"
 ```json
 {
   "agent": {
-    "Explorer": { "model": "anthropic/claude-haiku-4-20250514" },
-    "Coder": { "model": "anthropic/claude-sonnet-4-20250514" }
+    "Explorer": { "model": "qwen/qwen3.8-27b" },
+    "Coder": { "model": "qwen/qwen3.8-27b" }
   }
 }
 ```
@@ -242,7 +264,7 @@ export HARNESS_CODER_MODEL="anthropic/claude-sonnet-4-20250514"
 The Sentinel can pass an optional `model` argument via the `task` tool for per-invocation override:
 
 ```
-task(subagent_type: "Explorer", prompt: "...", model: "anthropic/claude-haiku-4-20250514")
+task(subagent_type: "Explorer", prompt: "...", model: "qwen/qwen3.8-27b")
 ```
 
 ### Model Resolution Priority
@@ -288,7 +310,7 @@ The `opencode.json` file configures the plugin's command registrations:
   "$schema": "https://opencode.ai/config.json",
   "command": {
     "harness": {
-      "description": "Trigger the harness multi-agent swarm workflow (parallel mode — Sentinel runs on main thread)",
+      "description": "Trigger the harness multi-agent swarm workflow (sequential mode — Sentinel runs on main thread, one task at a time)",
       "argumentHint": "[optional instructions]",
       "template": "/harness {{arguments}}"
     },
@@ -313,10 +335,10 @@ The `package.json` file configures the plugin's metadata and build configuration
 | Field | Value | Description |
 |---|---|---|
 | `name` | `@jef1056/opencode-harness` | Package name |
-| `version` | `1.0.2` | Package version |
+| `version` | `1.1.0` | Package version |
 | `main` | `dist/index.js` | Entry point |
 | `types` | `dist/index.d.ts` | TypeScript declarations |
-| `files` | `dist, opencode.json, harness.json, harness.json.example, assets` | Published files |
+| `files` | `dist, opencode.json, harness.json, harness.json.example, assets, map.ts` | Published files |
 
 ### `tsconfig.json`
 
@@ -352,220 +374,8 @@ Contains development and debugging scripts:
 
 | Version | Description |
 |---|---|
+| 1.1.0 | Qwen 3.8 27b optimization: 3-round interview, Explorer+Researcher merged, Reviewer+Auditor merged, fast-path gate, succession 16→8, 10 skills, sequential single-task execution, integrity modes |
 | 1.0.2 | Initial release with 11-agent swarm, workspace locking, and lifecycle management |
-
-## Configuration Files
-
-### `opencode.json`
-
-The `opencode.json` file configures the plugin's command registrations:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "command": {
-    "harness": {
-      "description": "Trigger the harness multi-agent swarm workflow (parallel mode — Sentinel runs on main thread)",
-      "argumentHint": "[optional instructions]",
-      "template": "/harness {{arguments}}"
-    },
-    "debug": {
-      "description": "Automated log-driven debug and repair",
-      "argumentHint": "<target_id>",
-      "template": "/debug {{arguments}}"
-    },
-    "plan": {
-      "description": "Strategic artifact-driven planning mode",
-      "argumentHint": "<request>",
-      "template": "/plan {{arguments}}"
-    }
-  }
-}
-```
-
-### `package.json`
-
-The `package.json` file configures the plugin's metadata and build configuration:
-
-| Field | Value | Description |
-|---|---|---|
-| `name` | `@jef1056/opencode-harness` | Package name |
-| `version` | `1.0.2` | Package version |
-| `main` | `dist/index.js` | Entry point |
-| `types` | `dist/index.d.ts` | TypeScript declarations |
-| `files` | `dist, opencode.json, harness.json, harness.json.example, assets` | Published files |
-
-### `tsconfig.json`
-
-The `tsconfig.json` file configures the TypeScript compiler:
-
-| Option | Value | Description |
-|---|---|---|
-| `target` | `ES2022` | ECMAScript target |
-| `module` | `NodeNext` | Module system |
-| `moduleResolution` | `NodeNext` | Module resolution |
-| `declaration` | `true` | Generate `.d.ts` files |
-| `outDir` | `./dist` | Output directory |
-| `strict` | `true` | Strict type checking |
-
-## Scripts
-
-### `scripts/reinstall-plugin.sh`
-
-A shell script for reinstalling the plugin. Useful for development and testing.
-
-## Scratch Directory
-
-### `scratch/`
-
-Contains development and debugging scripts:
-
-| Script | Description |
-|---|---|
-| `print_json.py` | Prints JSON data |
-| `check_spawns.py` | Checks agent spawns |
-
-## Configuration Files
-
-### `opencode.json`
-
-The `opencode.json` file configures the plugin's command registrations:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "command": {
-    "harness": {
-      "description": "Trigger the harness multi-agent swarm workflow (parallel mode — Sentinel runs on main thread)",
-      "argumentHint": "[optional instructions]",
-      "template": "/harness {{arguments}}"
-    },
-    "debug": {
-      "description": "Automated log-driven debug and repair",
-      "argumentHint": "<target_id>",
-      "template": "/debug {{arguments}}"
-    },
-    "plan": {
-      "description": "Strategic artifact-driven planning mode",
-      "argumentHint": "<request>",
-      "template": "/plan {{arguments}}"
-    }
-  }
-}
-```
-
-### `package.json`
-
-The `package.json` file configures the plugin's metadata and build configuration:
-
-| Field | Value | Description |
-|---|---|---|
-| `name` | `@jef1056/opencode-harness` | Package name |
-| `version` | `1.0.2` | Package version |
-| `main` | `dist/index.js` | Entry point |
-| `types` | `dist/index.d.ts` | TypeScript declarations |
-| `files` | `dist, opencode.json, harness.json, harness.json.example, assets` | Published files |
-
-### `tsconfig.json`
-
-The `tsconfig.json` file configures the TypeScript compiler:
-
-| Option | Value | Description |
-|---|---|---|
-| `target` | `ES2022` | ECMAScript target |
-| `module` | `NodeNext` | Module system |
-| `moduleResolution` | `NodeNext` | Module resolution |
-| `declaration` | `true` | Generate `.d.ts` files |
-| `outDir` | `./dist` | Output directory |
-| `strict` | `true` | Strict type checking |
-
-## Scripts
-
-### `scripts/reinstall-plugin.sh`
-
-A shell script for reinstalling the plugin. Useful for development and testing.
-
-## Scratch Directory
-
-### `scratch/`
-
-Contains development and debugging scripts:
-
-| Script | Description |
-|---|---|
-| `print_json.py` | Prints JSON data |
-| `check_spawns.py` | Checks agent spawns |
-
-## Configuration Files
-
-### `opencode.json`
-
-The `opencode.json` file configures the plugin's command registrations:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "command": {
-    "harness": {
-      "description": "Trigger the harness multi-agent swarm workflow (parallel mode — Sentinel runs on main thread)",
-      "argumentHint": "[optional instructions]",
-      "template": "/harness {{arguments}}"
-    },
-    "debug": {
-      "description": "Automated log-driven debug and repair",
-      "argumentHint": "<target_id>",
-      "template": "/debug {{arguments}}"
-    },
-    "plan": {
-      "description": "Strategic artifact-driven planning mode",
-      "argumentHint": "<request>",
-      "template": "/plan {{arguments}}"
-    }
-  }
-}
-```
-
-### `package.json`
-
-The `package.json` file configures the plugin's metadata and build configuration:
-
-| Field | Value | Description |
-|---|---|---|
-| `name` | `@jef1056/opencode-harness` | Package name |
-| `version` | `1.0.2` | Package version |
-| `main` | `dist/index.js` | Entry point |
-| `types` | `dist/index.d.ts` | TypeScript declarations |
-| `files` | `dist, opencode.json, harness.json, harness.json.example, assets` | Published files |
-
-### `tsconfig.json`
-
-The `tsconfig.json` file configures the TypeScript compiler:
-
-| Option | Value | Description |
-|---|---|---|
-| `target` | `ES2022` | ECMAScript target |
-| `module` | `NodeNext` | Module system |
-| `moduleResolution` | `NodeNext` | Module resolution |
-| `declaration` | `true` | Generate `.d.ts` files |
-| `outDir` | `./dist` | Output directory |
-| `strict` | `true` | Strict type checking |
-
-## Scripts
-
-### `scripts/reinstall-plugin.sh`
-
-A shell script for reinstalling the plugin. Useful for development and testing.
-
-## Scratch Directory
-
-### `scratch/`
-
-Contains development and debugging scripts:
-
-| Script | Description |
-|---|---|
-| `print_json.py` | Prints JSON data |
-| `check_spawns.py` | Checks agent spawns |
 
 ## Contributing
 
