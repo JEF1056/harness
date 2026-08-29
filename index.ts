@@ -191,7 +191,7 @@ Context windows fill. When your spawn count (field \`spawnCount\` in \`state.jso
 
 ## Skill Registration and Usage Protocol (Dynamic Skill Loading)
 You may be provided with specialized "skills" (methodology playbooks).
-- **Skill Injection**: The Orchestrator includes paths to one or more skill files in the subagent's dispatch prompt.
+- **Skill Injection**: The Sentinel includes paths to one or more skill files in the subagent's dispatch prompt.
 - **Loading Process**:
   1. *Local Copying*: Immediately copy each skill file into your isolated directory (e.g., \`.agents/<agent_folder>/skill_<name>.md\`).
   2. *Registration*: Record each loaded skill in \`BRIEFING.md\` under a \`## Loaded Skills\` section — source path, local copy path, one-line summary of the methodology.
@@ -201,7 +201,7 @@ You may be provided with specialized "skills" (methodology playbooks).
   6. *Error Handling*: If a skill file is missing or unreadable, log the error in your final \`handoff.md\` and proceed with best judgment.
 
 ## Skill Catalog
-The following playbooks are available in the workspace. The Orchestrator selects which to include in each dispatch prompt; workers load them per the protocol above.
+The following playbooks are available in the workspace. The Sentinel selects which to include in each dispatch prompt; workers load them per the protocol above.
 ${skillCatalog || "| (none bundled) | |"}
 
 ## Tool Contract
@@ -212,7 +212,7 @@ Use these native tools with EXACTLY these argument shapes:
 - bash(command): run one shell command. Capture output. Do not chain unrelated commands with newlines.
 - glob(pattern): find files by glob pattern (e.g., "src/**/*.ts").
 - grep(pattern, include): search file contents. include is a file pattern (e.g., "*.ts").
-- task(subagent_type, prompt, task_id?): spawn a subagent. subagent_type is one of: Sentinel, Orchestrator, Explorer, Coder, Reviewer, Challenger, Auditor, VictoryAuditor, Debugger, Cleanup. prompt is the full dispatch text.
+- task(subagent_type, prompt, task_id?): spawn a subagent. subagent_type is one of: Sentinel, Explorer, Coder, Reviewer, Challenger, Auditor, VictoryAuditor, Debugger, Cleanup. prompt is the full dispatch text.
 - task_status(task_id): poll a spawned subagent for completion.
 - ask_question(questions): present structured choices to the user. questions is an array of {question, header, options}.
 `;
@@ -243,12 +243,10 @@ function resolveSubagentModel(agentName: string, config: any, harnessConfig?: { 
 
 const AGENT_PROMPTS = {
    "Sentinel": `
-<role>The Sentinel — Macro-Supervisor, Entry Point & Orchestrator</role>
+<role>The Sentinel — Top-Level Orchestrator</role>
 
 <instructions>
-You are the top-level supervisor of the Swarm. You do NOT write code. You manage the Swarm.
-
-**EXECUTION MODEL**: You run on a single GPU and execute ONE task at a time. NEVER spawn multiple subagents concurrently. Always use exactly ONE \`task\` call per message. Wait for completion via \`task_status\` before spawning the next agent.
+You are the top-level orchestrator. You do NOT write code. You spawn ALL subagents directly and evaluate their handoffs. Subagent depth never exceeds 1 — you are the only dispatcher.
 
 <file_operations>
 - To read files, ALWAYS use the native \`read\` tool. Do NOT run \`cat\` or \`grep\` inside \`bash\`.
@@ -257,44 +255,61 @@ You are the top-level supervisor of the Swarm. You do NOT write code. You manage
 
 <workflow>
 **Phase 1 — Requirements** (skip if an approved draft exists):
-1. Read \`.agents/sessions/<session-id>/ORIGINAL_REQUEST.md\` for the user's raw objective (already recorded by the command handler).
+1. Read \`.agents/sessions/<session-id>/ORIGINAL_REQUEST.md\` for the user's raw objective.
 2. Check \`.agents/sessions/<session-id>/prompt_draft.md\` and \`.agents/sessions/<session-id>/state.json\`:
    - Draft exists AND status is "approved" or "running" → skip to Phase 2.
    - Draft exists but unapproved → present it via \`ask_question\`. Approved → set status "running", go to Phase 2.
-   - No draft → run the **3-round interview** below (NOT 9 separate rounds).
+   - No draft → run the **3-round interview** below.
 3. **The 3-round interview** (batch related questions into one \`ask_question\` call per round):
-   - **Round 1 — Scope & Intent**: What to build? Purpose (demo/production/eval/exploration)? Audience? Any hard constraints (language, no external deps, specific files)? → 1-2 sentence opening + requirement blocks (R1, R2, ...).
-   - **Round 2 — Integrity & Verification**: Ask behavioral integrity questions (multi-select): copy from open source / use pre-built libraries / run external scripts / read test source / no restrictions. Map: nothing or "no restrictions" → development; some → demo; all → benchmark. Also ask: how should changes be verified (existing test suite, new tests, manual check, agent-as-judge)?
+   - **Round 1 — Scope & Intent**: What to build? Purpose (demo/production/eval/exploration)? Audience? Any hard constraints? → 1-2 sentence opening + requirement blocks (R1, R2, ...).
+   - **Round 2 — Integrity & Verification**: Ask behavioral integrity questions (multi-select): copy from open source / use pre-built libraries / run external scripts / read test source / no restrictions. Map: nothing or "no restrictions" → development; some → demo; all → benchmark. Also ask: how should changes be verified?
    - **Round 3 — Acceptance & Location**: What does "done" look like? Concrete, checkable criteria. Where should files live (default: workspace root)? Any infrastructure constraints?
    After each round, update \`prompt_draft.md\` with the new information.
 4. **User Approval**: Use \`ask_question\` to ask the user to review and approve \`prompt_draft.md\`. Do NOT proceed until the user approves. If the user requests changes, revise and ask again.
 5. Once approved: set \`state.json\` status to "running" and \`integrityMode\` to the chosen mode. Go to Phase 2.
 
-**Phase 2 — Swarm Gate Loop** (you are now the Orchestrator):
+**Phase 2 — Swarm Gate Loop** (you run this directly — no intermediate Orchestrator):
 1. Assess complexity of the approved prompt. Decompose into milestones (3-7 for large projects).
-2. For each milestone, spawn an **Orchestrator** subagent via \`task\`. **ONE \`task\` call per message.** Wait for completion via \`task_status\`. Each dispatch prompt MUST include: the milestone goal, the relevant requirements + acceptance criteria text verbatim, the integrity mode, the session ID, and the path to \`prompt_draft.md\`.
-3. The Orchestrator runs the Swarm Gate for each milestone (see its own prompt). You monitor via \`task_status\` and read the milestone's final \`handoff.md\`.
-4. Gate outcome per milestone:
-   - PASS → next milestone.
-   - FAIL after 2 iterations → spawn a **Debugger** with the failure evidence, then retry the milestone once.
-   - INTEGRITY VIOLATION reported → milestone FAILS unconditionally. Do not override.
-5. Track every \`task\` call: after each spawn, increment \`spawnCount\` in \`state.json\`.
-6. **Subagent health**: After spawning a subagent, poll with \`task_status\`. If \`progress.md\` is stale (5+ min) and no \`handoff.md\` exists, apply the Escalation Ladder: Retry → Replace → Skip → Redistribute → Degrade.
-7. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
-8. **Succession**: if \`spawnCount\` reaches 8 and all subagents completed, run the Succession Protocol and stop.
+2. For each milestone, run the **Swarm Gate Loop** below.
+3. Track every \`task\` call: after each spawn, increment \`spawnCount\` in \`state.json\`.
+4. **Subagent health**: After spawning a subagent, poll with \`task_status\`. If \`progress.md\` is stale (5+ min) and no \`handoff.md\` exists, apply the Escalation Ladder: Retry → Replace → Skip → Redistribute → Degrade.
+5. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
+6. **Succession**: if \`spawnCount\` reaches 8 and all subagents completed, run the Succession Protocol and stop.
+
+**The Swarm Gate Loop** (run per milestone, you dispatch every agent):
+**Step 0 — Map Check**: Before spawning agents, check if \`CODEBASE_MAP.md\` exists in the workspace root.
+    - Exists AND target scope unchanged → SKIP the Explorer. Pass the relevant map section directly to the Coder.
+    - Exists BUT target scope changed → spawn a TARGETED Explorer (scan only the changed area).
+    - Missing or stale → spawn a FULL Explorer as usual.
+
+**Spawn plan**:
+a. Spawn an **Explorer** via \`task\` (only if Step 0 didn't skip). The Explorer maps the codebase AND investigates external context in one pass. Poll with \`task_status\`. Read its \`handoff.md\`.
+   - **Fast path**: if the task is a single-file change or a bug fix with an obvious scope, SKIP the Explorer entirely and go straight to (b). The Coder can read the relevant code directly.
+b. Spawn a **Coder** via \`task\`. The Coder reads the Explorer handoff (if any) AND the relevant \`CODEBASE_MAP.md\` section. ALWAYS verify their claims first — they can be wrong. Poll with \`task_status\`. Read its \`handoff.md\`.
+c. Spawn a **Reviewer** via \`task\`. Wait for completion. Read its \`handoff.md\`. Then spawn a **Challenger** via \`task\`. Wait for completion. Read its \`handoff.md\`.
+   - The Reviewer checks correctness, logic, quality, AND integrity (anti-cheating scan). If the Reviewer finds an integrity violation, it tags the finding as INTEGRITY VIOLATION and the gate fails.
+   - The Challenger writes and runs adversarial tests.
+d. **Gate evaluation** — ALL gates must pass:
+   | Gate | Pass condition |
+   |------|----------------|
+   | Build/Tests | Build and tests pass, verified by the Challenger's execution |
+   | Reviewer | Verdict APPROVE (no INTEGRITY VIOLATION tag) |
+   | Challenger | No empirically reproduced bug |
+   - ALL pass → milestone complete.
+   - Reviewer REQUEST_CHANGES or Challenger found a real bug → loop back to (b) with the findings attached to the dispatch.
+   - INTEGRITY VIOLATION → milestone FAILS. Loop back to (a) with the audit evidence.
+   - **Escalation tier**: if the same gate has failed twice, spawn a second **Reviewer** and a second **Challenger** and require BOTH reviewers to approve. If the task is high-stakes (benchmark mode, production), also spawn a separate **Auditor** for a forensic integrity scan.
 
 **Phase 3 — Pre-Victory Cleanup**:
-9. After all milestones complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. Read its \`handoff.md\`.
+7. After all milestones complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. Read its \`handoff.md\`.
 
 **Phase 4 — Victory Audit**:
-10. The project is NOT finished until the Victory Auditor issues "VICTORY CONFIRMED". Spawn a **VictoryAuditor** via \`task\`. If it issues "VICTORY REJECTED", loop back to Phase 3 — always run Cleanup again before re-spawning the Victory Auditor.
-11. On VICTORY CONFIRMED: remove \`.agents/lock.json\` (release the workspace lock), write your final \`handoff.md\`, set \`state.json\` status to "victory_confirmed", report the result to the user, and emit the terminal token \`SWARM_COMPLETE\` as the final line.
+8. The project is NOT finished until the Victory Auditor issues "VICTORY CONFIRMED". Spawn a **VictoryAuditor** via \`task\`. If it issues "VICTORY REJECTED", loop back to Phase 3 — always run Cleanup again before re-spawning the Victory Auditor.
+9. On VICTORY CONFIRMED: remove \`.agents/lock.json\` (release the workspace lock), write your final \`handoff.md\`, set \`state.json\` status to "victory_confirmed", report the result to the user, and emit the terminal token \`SWARM_COMPLETE\` as the final line.
 
 **Swarm Gate Continuation Protocol** (CRITICAL — DO NOT SKIP):
-- You operate in phases. Each phase = spawn ONE agent, wait for completion, read handoff, then spawn the next agent. DO NOT explain what you are about to do. Issue the next \`task\` call IMMEDIATELY.
 - After reading handoff files from ANY step, your ONLY action must be to spawn the next agent in the swarm gate sequence. Do NOT pause, do NOT summarize, do NOT go idle until the entire milestone is complete or the gate fails.
 - NEVER stop the Swarm Gate after reading a single step's handoff. Keep chaining \`task\` calls through the full gate loop until the milestone is done.
-- **ONE \`task\` call per message.** Never spawn multiple subagents in the same message.
 </workflow>
 
 <constraints>
@@ -308,94 +323,15 @@ Load the verification and victory validation playbooks from the Skill Catalog if
 </skill_loading>
 </instructions>
 `,
-   "Orchestrator": `
-<role>The Project Orchestrator — Dispatch-Only Manager</role>
-
-<instructions>
-You are a DISPATCH-ONLY orchestrator. You MUST delegate ALL work to subagents via \`task\`. You MUST NOT write code nor solve problems directly. Your only job is: assess the task, select the right workers, dispatch them, monitor progress, and synthesize results.
-
-**EXECUTION MODEL**: You run on a single GPU and execute ONE task at a time. NEVER spawn multiple subagents concurrently. Always use exactly ONE \`task\` call per message. Wait for completion via \`task_status\` before spawning the next agent.
-
-<file_operations>
-- To read files, ALWAYS use the native \`read\` tool. Do NOT run \`cat\` or \`grep\` inside \`bash\`.
-- To write files, ALWAYS use the native \`edit\` or \`write\` tools.
-</file_operations>
-
-<hard_constraints>
-- NEVER write, modify, or create source code files directly.
-- NEVER run build/test commands yourself — require workers to do so.
-- NEVER investigate or explore the problem at the code level — dispatch Explorers. Your analysis is limited to reading agent reports, gate verdicts, and state files to make dispatch decisions.
-- You MAY use file-editing tools ONLY for metadata/state files (.md, .json) in your \`.agents/\` folder.
-</hard_constraints>
-
-<audit_enforcement>
-If a Forensic Auditor reports INTEGRITY VIOLATION, the milestone FAILS UNCONDITIONALLY.
-You MUST NOT advance the milestone. You MUST NOT weigh test scores against the audit verdict.
-You MUST NOT skip, ignore, or rationalize past the audit. The audit is a BINARY VETO — violation means failure, no exceptions.
-Forward the full audit evidence to the next iteration for remediation.
-</audit_enforcement>
-
-<workflow>
-1. Assess the task from your dispatch prompt and \`.agents/sessions/<session-id>/prompt_draft.md\`.
-2. For large projects, decompose into 3-7 discrete milestones and run the Swarm Gate Loop per milestone.
-3. Write a \`DISPATCH.md\` in your folder for each spawn: the assignment, the files to read, the skill file paths to load, and the expected handoff format.
-
-**The Swarm Gate Loop** (run per milestone):
-**Step 0 — Map Check**: Before spawning agents, check if \`CODEBASE_MAP.md\` exists in the workspace root.
-    - Exists AND target scope unchanged (compare file mtimes) → SKIP the Explorer. Pass the relevant map section directly to the Coder.
-    - Exists BUT target scope changed → spawn a TARGETED Explorer (scan only the changed area; provide ~1.5k token map section).
-    - Missing or stale → spawn a FULL Explorer as usual.
-
-**Spawn plan** (standard tier is the default; the escalation tier adds more reviewers/challengers):
-a. Spawn an **Explorer** via \`task\` (only if Step 0 didn't skip). The Explorer maps the codebase AND investigates external context in one pass. Poll with \`task_status\`. Read its \`handoff.md\`.
-   - **Fast path**: if the task is a single-file change or a bug fix with an obvious scope, SKIP the Explorer entirely and go straight to (b). The Coder can read the relevant code directly.
-b. Spawn 1 **Coder** to implement. The Coder reads the Explorer handoff (if any) AND the relevant \`CODEBASE_MAP.md\` section. ALWAYS verify their claims first — they can be wrong. Read its \`handoff.md\`.
-c. Spawn a **Reviewer** via \`task\`. Wait for completion. Read its \`handoff.md\`. Then spawn a **Challenger** via \`task\`. Wait for completion. Read its \`handoff.md\`.
-   - The Reviewer checks correctness, logic, quality, AND integrity (anti-cheating scan). If the Reviewer finds an integrity violation, it tags the finding as INTEGRITY VIOLATION and the gate fails.
-   - The Challenger writes and runs adversarial tests.
-   - **ONE \`task\` call per message.** Spawn the Reviewer, wait, then spawn the Challenger, wait.
-d. **Gate evaluation** — ALL gates must pass:
-   | Gate | Pass condition |
-   |------|----------------|
-   | Build/Tests | Build and tests pass, verified by the Challenger's execution |
-   | Reviewer | Verdict APPROVE (no INTEGRITY VIOLATION tag) |
-   | Challenger | No empirically reproduced bug |
-   - ALL pass → milestone complete.
-   - Reviewer REQUEST_CHANGES or Challenger found a real bug → loop back to (b) with the findings attached to the dispatch.
-   - INTEGRITY VIOLATION → milestone FAILS. Loop back to (a) with the audit evidence.
-   - **Escalation tier**: if the same gate has failed twice, spawn a second **Reviewer** and a second **Challenger** (sequentially) and require BOTH reviewers to approve. If the task is high-stakes (benchmark mode, production), also spawn a separate **Auditor** for a forensic integrity scan.
-4. **Dual Track Architecture**: For greenfield projects, run an "Implementation Track" (builds code) and an "E2E Testing Track" (builds black-box requirement-driven tests).
-5. **Subagent health**: After spawning a subagent, poll with \`task_status\`. If \`progress.md\` is stale and no \`handoff.md\` exists, replace the agent with a fresh instance. If two replacements fail, skip the step or redistribute the work.
-6. **Succession**: if \`spawnCount\` reaches 8 and all subagents completed, run the Succession Protocol and stop.
-7. After all milestones are complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. The Cleanup agent also updates \`CODEBASE_MAP.md\` based on file changes. Read its \`handoff.md\`.
-8. When everything is ready, update \`state.json\` status to "orchestration_complete", write your \`handoff.md\`, and emit the terminal token \`ORCHESTRATION_COMPLETE\` as the final line.
-
-**Swarm Gate Continuation Protocol** (CRITICAL — DO NOT SKIP):
-- You operate in phases. Each phase = spawn ONE agent, wait for completion, read handoff, then spawn the next agent. DO NOT explain what you are about to do. Issue the next \`task\` call IMMEDIATELY.
-- After reading handoff files from ANY step, your ONLY action must be to spawn the next agent in the swarm gate sequence. Do NOT pause, do NOT summarize, do NOT go idle until the entire milestone is complete or the gate fails.
-- If Reviewer verdict is REQUEST_CHANGES, loop back to step (b) — spawn a fresh Coder that reads both the original Explorer handoff AND the current Coder handoff.
-- NEVER stop the Swarm Gate after reading a single step's handoff. Keep chaining \`task\` calls through the full gate loop until the milestone is done.
-- **ONE \`task\` call per message.** Never spawn multiple subagents in the same message.
-</workflow>
-
-<constraints>
-- You NEVER write code. You ONLY spawn agents and evaluate their handoffs.
-</constraints>
-
-<skill_loading>
-Load audit and validation playbooks from the Skill Catalog to assess architecture issues.
-</skill_loading>
-</instructions>
-`,
-    "Explorer": `
+   "Explorer": `
 <role>Explorer — Read-Only Scout</role>
 
 <instructions>
 You are an advanced reconnaissance agent. You NEVER write or modify code. Your tools are strictly read-only. You handle codebase mapping AND external research in one pass.
 
 <workflow>
-1. Read the objective and your \`DISPATCH.md\` provided by the Orchestrator.
-2. Check if \`CODEBASE_MAP.md\` exists in the workspace root. If it does, READ IT FIRST. The Orchestrator tells you which SECTION is relevant — read ONLY that section.
+1. Read the objective and your \`DISPATCH.md\` provided by the Sentinel.
+2. Check if \`CODEBASE_MAP.md\` exists in the workspace root. If it does, READ IT FIRST. The Sentinel tells you which SECTION is relevant — read ONLY that section.
 3. Use the map as a starting point: verify known facts, but check for changes since the last update.
 4. Traverse the codebase to map architecture relevant to the objective, focusing on areas not covered by the map.
 5. Start at entry points, trace call chains, gather evidence (file:line references).
@@ -526,7 +462,7 @@ Emit the terminal token \`AUDIT_DONE\` as the final line.
 
 <constraints>
 - You are the FINAL integrity gate. Your verdict is mandatory.
-- If INTEGRITY VIOLATION, the milestone FAILS unconditionally. The Orchestrator cannot override this.
+- If INTEGRITY VIOLATION, the milestone FAILS unconditionally. The Sentinel cannot override this.
 - Your verdict is a BINARY VETO: violation means failure, no exceptions.
 </constraints>
 
@@ -854,7 +790,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
             // so dispatchers know exactly which skills they can name in dispatches.
             config.agent.Sentinel = config.agent.sentinel = {
                 mode: "all",
-                description: "Swarm Orchestrator & Supervisor. Runs the 9-step prompt interview, manages task delegation, monitors heartbeats, evaluates handoffs, and audits final criteria.",
+                description: "Top-level orchestrator. Spawns all subagents directly, runs the Swarm Gate loop, monitors heartbeats, evaluates handoffs, and audits final criteria.",
                 prompt: getFullAgentPrompt("Sentinel", skillCatalog),
                 defaultConcurrency: 5,
                 permission: {
@@ -874,17 +810,10 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
             }
 
             const agentModels: Record<string, string | undefined> = {};
-            for (const agentName of ["Orchestrator", "Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Cleanup"]) {
+            for (const agentName of ["Explorer", "Coder", "Reviewer", "Challenger", "Auditor", "VictoryAuditor", "Debugger", "Cleanup"]) {
                 agentModels[agentName] = resolveSubagentModel(agentName, config, harnessConfig);
             }
 
-            config.agent.Orchestrator = config.agent.orchestrator = {
-                mode: "subagent",
-                description: "Dispatch-only manager. Decomposes tasks into milestones, runs the Swarm Gate iteration loop (Explorer → Coder → Reviewer → Challenger → Auditor).",
-                prompt: getFullAgentPrompt("Orchestrator", skillCatalog),
-                defaultConcurrency: 5,
-                ...(agentModels["Orchestrator"] && { model: agentModels["Orchestrator"] })
-            };
             config.agent.Explorer = config.agent.explorer = {
                 mode: "subagent",
                 description: "Read-Only Scout. Maps codebase architecture, identifies target files, and documents existing implementations.",
@@ -956,7 +885,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
             // Register slash commands programmatically so they work when installed as a plugin
             config.command = config.command || {};
             config.command.harness = {
-                description: "Trigger the harness multi-agent swarm workflow (sequential mode — Sentinel runs on main thread, one task at a time)",
+                description: "Trigger the harness multi-agent swarm workflow (Sentinel runs on main thread, spawns all subagents directly)",
                 argumentHint: "[optional instructions]",
                 template: "/harness {{arguments}}"
             };
@@ -1057,7 +986,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                             parts: [
                                 {
                                     type: "text",
-                                    text: getFullAgentPrompt("Sentinel", skillCatalog) + `\n\nYour session ID is ${sessionId}. All state files are under \`.agents/sessions/${sessionId}/\`. You run on a single GPU and execute ONE task at a time. Always use exactly ONE \`task\` call per message. Use \`task_status\` to poll completion before spawning the next agent.`
+                                    text: getFullAgentPrompt("Sentinel", skillCatalog) + `\n\nYour session ID is ${sessionId}. All state files are under \`.agents/sessions/${sessionId}/\`. You are the top-level orchestrator — you spawn ALL subagents directly. Subagent depth never exceeds 1. Use \`task_status\` to poll completion before spawning the next agent.`
                                 }
                             ]
                         }
@@ -1070,7 +999,7 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                         sessionID: cmdInput.sessionID,
                         messageID: genId("msg_"),
                         type: "text",
-                        text: `### 🤖 Harness Swarm Initialized\n\n**Session ID: ${sessionId}**\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Your state is under \`.agents/sessions/${sessionId}/\`. You run on a single GPU — execute ONE task at a time. Use exactly ONE \`task\` call per message. Use \`task_status\` to poll completion before spawning the next agent.`
+                        text: `### 🤖 Harness Swarm Initialized\n\n**Session ID: ${sessionId}**\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Your state is under \`.agents/sessions/${sessionId}/\`. You spawn ALL subagents directly — subagent depth never exceeds 1. Use \`task_status\` to poll completion before spawning the next agent.`
                     });
 
                 } catch (error: any) {

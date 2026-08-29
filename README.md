@@ -6,12 +6,12 @@ Listed in [awesome-opencode](https://github.com/awesome-opencode/awesome-opencod
 
 ## Features
 
-- **Sequential swarm execution**: Agents run one at a time via native opencode `task` (single call per message) — optimized for single-GPU environments
+- **Flat hierarchy**: Sentinel spawns ALL subagents directly — subagent depth never exceeds 1
 - **Swarm Gate pipeline**: Diamond workflow with Explorer → Coder → Reviewer/Challenger phases
 - **Integrity modes**: Development, demo, and benchmark modes with escalating anti-cheating enforcement
 - **Escalation ladder**: Retry → Replace → Skip → Redistribute → Degrade for stalled agents
 - **Succession protocol**: At 8+ spawns, the Sentinel delegates to a fresh subagent to avoid context bloat
-- **Single-GPU optimized**: Sequential execution model — one task at a time, no concurrent spawning
+- **Handoff chain**: Each agent reads the previous agent's `handoff.md` before starting
 - **Real-time monitoring**: File watchers + heartbeat polling + TUI toast notifications
 - **Artifact-driven handoffs**: Structured 5-section `handoff.md` files with forensic verification
 - **10 methodology playbooks**: Skills synced to workspace and injected into agent prompts
@@ -21,12 +21,11 @@ Listed in [awesome-opencode](https://github.com/awesome-opencode/awesome-opencod
 
 ## Architecture
 
-Harness runs a **10-agent swarm** orchestrated by the Sentinel:
+Harness runs a **9-agent swarm**. The Sentinel (top-level orchestrator) spawns ALL subagents directly — subagent depth never exceeds 1:
 
 | Agent | Role |
 |---|---|
-| Sentinel | Macro-supervisor — runs on the main thread, manages the swarm, mode: `all`, defaultConcurrency: 5, granted `ask_question` tool |
-| Orchestrator | Dispatch-only manager — decomposes tasks into milestones, mode: `subagent`, defaultConcurrency: 5 |
+| Sentinel | Top-level orchestrator — runs on the main thread, spawns all subagents directly, runs the Swarm Gate loop, mode: `all`, defaultConcurrency: 5, granted `ask_question` tool |
 | Explorer | Read-only scout — maps codebase architecture AND external research, mode: `subagent` |
 | Coder | Armed worker — implements changes, verifies builds, mode: `subagent` |
 | Reviewer | Adversarial code reviewer + integrity gate — checks correctness, quality, and anti-cheating, mode: `subagent` |
@@ -38,11 +37,11 @@ Harness runs a **10-agent swarm** orchestrated by the Sentinel:
 
 ### The Swarm Gate Loop
 
-Each milestone passes through a diamond pipeline:
+The Sentinel runs the Swarm Gate Loop directly for each milestone (no intermediate Orchestrator):
 
 ```
     ┌────────────┐
-    │  Explorer  │
+    │  Explorer  │  (skipped on fast path)
     └────┬───────┘
          ▼
     ┌─────────┐
@@ -55,15 +54,20 @@ Each milestone passes through a diamond pipeline:
     │         │
     └────┬────┘
          ▼
-  [Victory Audit]
+  [Gate Evaluation]
+         │
+    ┌────┴────┐
+    ▼         ▼
+ [Cleanup] [Victory Audit]
 ```
 
 - Explorer handles both codebase mapping and external research in one pass
 - Reviewer handles correctness, quality, AND integrity scanning in one pass
-- Challenger runs adversarial stress tests after Reviewer (sequential)
+- Challenger writes and runs adversarial stress tests
 - Auditor (separate) only for high-stakes: benchmark/production integrity modes
 - INTEGRITY VIOLATION unconditionally fails the milestone
 - Dual Track Architecture for greenfield projects: Implementation Track then E2E Testing Track
+- **Handoff chain**: each agent reads the previous agent's `handoff.md` before starting
 
 ### Integrity Modes
 
@@ -138,7 +142,7 @@ The plugin creates the following files automatically:
 
 ### `/harness [optional instructions]`
 
-Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask). Executes ONE task at a time — optimized for single-GPU environments. Uses exactly one `task` call per message and `task_status` for polling before spawning the next agent.
+Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask) and spawns ALL subagents directly — subagent depth never exceeds 1. Uses `task_status` for polling before spawning the next agent.
 
 **Behavior**:
 - Creates `.agents/` directory and generates a unique session ID
@@ -310,7 +314,7 @@ The `opencode.json` file configures the plugin's command registrations:
   "$schema": "https://opencode.ai/config.json",
   "command": {
     "harness": {
-      "description": "Trigger the harness multi-agent swarm workflow (sequential mode — Sentinel runs on main thread, one task at a time)",
+      "description": "Trigger the harness multi-agent swarm workflow (Sentinel runs on main thread, spawns all subagents directly)",
       "argumentHint": "[optional instructions]",
       "template": "/harness {{arguments}}"
     },
@@ -374,7 +378,7 @@ Contains development and debugging scripts:
 
 | Version | Description |
 |---|---|
-| 1.1.0 | Qwen 3.8 27b optimization: 3-round interview, Explorer+Researcher merged, Reviewer+Auditor merged, fast-path gate, succession 16→8, 10 skills, sequential single-task execution, integrity modes |
+| 1.1.0 | Flat hierarchy: Sentinel spawns all subagents directly (depth=1), handoff chain, 3-round interview, 10 skills, integrity modes |
 | 1.0.2 | Initial release with 11-agent swarm, workspace locking, and lifecycle management |
 
 ## Contributing
