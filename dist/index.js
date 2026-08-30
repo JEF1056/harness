@@ -150,7 +150,7 @@ You are given a specific role and set of constraints.
 ## Core Directives
 - **Zero Configuration**: Never assume a framework is set up correctly. Always verify.
 - **The .agents/ Directory**: Agents communicate via state files stored in the hidden \`.agents/\` folder at the project root.
-- **Directory Structure**: Each milestone gets its own subdirectory under \`.agents/<milestone_id>/\` containing agent-specific folders. The Sentinel's state lives in \`.agents/sessions/<session-id>/sentinel/\` (scoped under a session UUID). All plan files from the \`/plan\` command live in \`.agents/sessions/<session-id>/plans/\` with descriptive kebab-case filenames. Subagent state (handoff.md, progress.md) remains at \`.agents/<agentName>/\`.
+- **Directory Structure**: Each milestone gets its own subdirectory under \`.agents/<milestone_id>/\` containing agent-specific folders. The Orchestrator's state lives in \`.agents/sessions/<session-id>/orchestrator/\` (scoped under a session UUID). All plan files from the \`/plan\` command live in \`.agents/sessions/<session-id>/plans/\` with descriptive kebab-case filenames. Subagent state (handoff.md, progress.md) remains at \`.agents/<agentName>/\`.
 - **Strict Separation**: Each spawned agent gets its own subdirectory (e.g., \`.agents/explorer_lexer_1/\`). You can read any folder but may ONLY write to your own directory.
 - **Code Prohibition**: The \`.agents/\` directory is strictly for metadata (plans, progress, handoffs). Source code, tests, and data must NEVER be placed here.
 
@@ -196,7 +196,7 @@ Context windows fill. When your spawn count (field \`spawnCount\` in \`state.jso
 
 ## Skill Registration and Usage Protocol (Dynamic Skill Loading)
 You may be provided with specialized "skills" (methodology playbooks).
-- **Skill Injection**: The Sentinel includes paths to one or more skill files in the subagent's dispatch prompt.
+- **Skill Injection**: The Orchestrator includes paths to one or more skill files in the subagent's dispatch prompt.
 - **Loading Process**:
   1. *Local Copying*: Immediately copy each skill file into your isolated directory (e.g., \`.agents/<agent_folder>/skill_<name>.md\`).
   2. *Registration*: Record each loaded skill in \`BRIEFING.md\` under a \`## Loaded Skills\` section — source path, local copy path, one-line summary of the methodology.
@@ -206,7 +206,7 @@ You may be provided with specialized "skills" (methodology playbooks).
   6. *Error Handling*: If a skill file is missing or unreadable, log the error in your final \`handoff.md\` and proceed with best judgment.
 
 ## Skill Catalog
-The following playbooks are available in the workspace. The Sentinel selects which to include in each dispatch prompt; workers load them per the protocol above.
+The following playbooks are available in the workspace. The Orchestrator selects which to include in each dispatch prompt; workers load them per the protocol above.
 ${skillCatalog || "| (none bundled) | |"}
 
 ## Tool Contract
@@ -217,7 +217,7 @@ Use these native tools with EXACTLY these argument shapes:
 - bash(command): run one shell command. Capture output. Do not chain unrelated commands with newlines.
 - glob(pattern): find files by glob pattern (e.g., "src/**/*.ts").
 - grep(pattern, include): search file contents. include is a file pattern (e.g., "*.ts").
-- task(subagent_type, prompt, task_id?): spawn a subagent. subagent_type is one of: Sentinel, Explorer, Coder, Reviewer, Challenger, Auditor, VictoryAuditor, Debugger, Cleanup. prompt is the full dispatch text.
+- task(subagent_type, prompt, task_id?): spawn a subagent. subagent_type is one of: Orchestrator, Explorer, Coder, Reviewer, Challenger, Auditor, VictoryAuditor, Debugger, Cleanup. prompt is the full dispatch text.
 - task_status(task_id): poll a spawned subagent for completion.
 - ask_question(questions): present structured choices to the user. questions is an array of {question, header, options}.
 `;
@@ -245,8 +245,8 @@ function resolveSubagentModel(agentName, config, harnessConfig) {
 }
 // --- 4. Subagent Prompt Catalog ---
 const AGENT_PROMPTS = {
-    "Sentinel": `
-<role>The Sentinel — Top-Level Orchestrator</role>
+    "Orchestrator": `
+<role>The Orchestrator — Top-Level Dispatcher</role>
 
 <instructions>
 You are the top-level orchestrator. You do NOT write code. You spawn ALL subagents directly and evaluate their handoffs. Subagent depth never exceeds 1 — you are the only dispatcher.
@@ -333,8 +333,8 @@ Load the verification and victory validation playbooks from the Skill Catalog if
 You are an advanced reconnaissance agent. You NEVER write or modify code. Your tools are strictly read-only. You handle codebase mapping AND external research in one pass.
 
 <workflow>
-1. Read the objective and your \`DISPATCH.md\` provided by the Sentinel.
-2. Check if \`CODEBASE_MAP.md\` exists in the workspace root. If it does, READ IT FIRST. The Sentinel tells you which SECTION is relevant — read ONLY that section.
+1. Read the objective and your \`DISPATCH.md\` provided by the Orchestrator.
+2. Check if \`CODEBASE_MAP.md\` exists in the workspace root. If it does, READ IT FIRST. The Orchestrator tells you which SECTION is relevant — read ONLY that section.
 3. Use the map as a starting point: verify known facts, but check for changes since the last update.
 4. Traverse the codebase to map architecture relevant to the objective, focusing on areas not covered by the map.
 5. Start at entry points, trace call chains, gather evidence (file:line references).
@@ -465,7 +465,7 @@ Emit the terminal token \`AUDIT_DONE\` as the final line.
 
 <constraints>
 - You are the FINAL integrity gate. Your verdict is mandatory.
-- If INTEGRITY VIOLATION, the milestone FAILS unconditionally. The Sentinel cannot override this.
+- If INTEGRITY VIOLATION, the milestone FAILS unconditionally. The Orchestrator cannot override this.
 - Your verdict is a BINARY VETO: violation means failure, no exceptions.
 </constraints>
 
@@ -478,7 +478,7 @@ Load audit and validation playbooks from the Skill Catalog.
 <role>Victory Auditor — The Final Gatekeeper</role>
 
 <instructions>
-You are spawned by the Sentinel at project end. You share NO context with the implementation team. Trust nothing on disk.
+You are spawned by the Orchestrator at project end. You share NO context with the implementation team. Trust nothing on disk.
 
 <workflow>
 **Phase A — Timeline Audit**:
@@ -590,7 +590,7 @@ export const server = async (input, options) => {
             const agents = fs.readdirSync(agentsDir);
             for (const agent of agents) {
                 // Skip session directories (state management, not agents)
-                if (agent === 'sentinel' || agent === 'state.json' || agent === 'plans' || agent === 'sessions' || agent === 'skills' || agent === 'lock.json')
+                if (agent === 'orchestrator' || agent === 'sentinel' || agent === 'state.json' || agent === 'plans' || agent === 'sessions' || agent === 'skills' || agent === 'lock.json')
                     continue;
                 // Skip non-directories
                 const agentDir = path.join(agentsDir, agent);
@@ -659,8 +659,8 @@ export const server = async (input, options) => {
         if (activeWatchers.has(agentName))
             return;
         const agentPath = path.join(agentsDir, agentName);
-        // Notify user about subagent spawn (except for sentinel)
-        if (agentName !== 'sentinel') {
+        // Notify user about subagent spawn (except for orchestrator)
+        if (agentName !== 'orchestrator' && agentName !== 'sentinel') {
             showSwarmToast("Swarm Notification", `Spawned subagent: ${agentName}`, "info");
         }
         try {
@@ -685,7 +685,7 @@ export const server = async (input, options) => {
                     try {
                         const handoffPath = path.join(agentPath, 'handoff.md');
                         if (fs.existsSync(handoffPath)) {
-                            showSwarmToast(agentName, "Task completed. Handing off back to Sentinel.", "success");
+                            showSwarmToast(agentName, "Task completed. Handing off back to Orchestrator.", "success");
                         }
                     }
                     catch (e) { }
@@ -781,10 +781,10 @@ export const server = async (input, options) => {
             config.agent = config.agent || {};
             // Build the playbook catalog once; it is embedded in every agent prompt
             // so dispatchers know exactly which skills they can name in dispatches.
-            config.agent.Sentinel = config.agent.sentinel = {
+            config.agent.Orchestrator = config.agent.orchestrator = {
                 mode: "all",
                 description: "Top-level orchestrator. Spawns all subagents directly, runs the Swarm Gate loop, monitors heartbeats, evaluates handoffs, and audits final criteria.",
-                prompt: getFullAgentPrompt("Sentinel", skillCatalog),
+                prompt: getFullAgentPrompt("Orchestrator", skillCatalog),
                 defaultConcurrency: 5,
                 permission: {
                     task: "allow",
@@ -874,7 +874,7 @@ export const server = async (input, options) => {
             // Register slash commands programmatically so they work when installed as a plugin
             config.command = config.command || {};
             config.command.harness = {
-                description: "Trigger the harness multi-agent swarm workflow (Sentinel runs on main thread, spawns all subagents directly)",
+                description: "Trigger the harness multi-agent swarm workflow (Orchestrator runs on main thread, spawns all subagents directly)",
                 argumentHint: "[optional instructions]",
                 template: "/harness {{arguments}}"
             };
@@ -918,7 +918,7 @@ export const server = async (input, options) => {
                             sessionID: cmdInput.sessionID,
                             messageID: genId("msg_"),
                             type: "text",
-                            text: `### ⚠️ Workspace Locked\n\nThe workspace is already in use by another Sentinel (session: ${lockResult.owner}).\n\nOnly one Sentinel can operate per workspace at a time. Wait for the current Sentinel to complete, or manually remove \`.agents/lock.json\` to force-release the lock (useful if the previous Sentinel crashed).\n\nTo check the lock status, read \`.agents/lock.json\`.`
+                            text: `### ⚠️ Workspace Locked\n\nThe workspace is already in use by another Orchestrator (session: ${lockResult.owner}).\n\nOnly one Orchestrator can operate per workspace at a time. Wait for the current Orchestrator to complete, or manually remove \`.agents/lock.json\` to force-release the lock (useful if the previous Orchestrator crashed).\n\nTo check the lock status, read \`.agents/lock.json\`.`
                         });
                         return;
                     }
@@ -949,14 +949,14 @@ export const server = async (input, options) => {
                         spawnCount: 0
                     };
                     fs.writeFileSync(statePath, JSON.stringify(initialState, null, 2), 'utf8');
-                    // Create Sentinel folders (scoped under session directory)
-                    const sentinelDir = path.join(sessionDir, 'sentinel');
-                    fs.mkdirSync(sentinelDir, { recursive: true });
-                    fs.writeFileSync(path.join(sentinelDir, 'BRIEFING.md'), `# BRIEFING\n\n## 🔒 My Identity\nRole: Sentinel\nSession: ${sessionId}\n\n## 🔒 Key Constraints\nSee Universal Mechanics.\n\n## 🔒 My Workflow\nTask: Orchestrate the harness swarm workflow\n`);
-                    fs.writeFileSync(path.join(sentinelDir, 'progress.md'), `# Progress\nSession: ${sessionId}\nLast visited: ${new Date().toISOString()}\nStatus: Initializing\n`);
+                    // Create Orchestrator folders (scoped under session directory)
+                    const orchestratorDir = path.join(sessionDir, 'orchestrator');
+                    fs.mkdirSync(orchestratorDir, { recursive: true });
+                    fs.writeFileSync(path.join(orchestratorDir, 'BRIEFING.md'), `# BRIEFING\n\n## 🔒 My Identity\nRole: Orchestrator\nSession: ${sessionId}\n\n## 🔒 Key Constraints\nSee Universal Mechanics.\n\n## 🔒 My Workflow\nTask: Orchestrate the harness swarm workflow\n`);
+                    fs.writeFileSync(path.join(orchestratorDir, 'progress.md'), `# Progress\nSession: ${sessionId}\nLast visited: ${new Date().toISOString()}\nStatus: Initializing\n`);
                     // Start monitoring
                     startHeartbeatMonitor();
-                    // /harness — Inject Sentinel prompt directly into the main thread — the LLM becomes the Sentinel
+                    // /harness — Inject Orchestrator prompt directly into the main thread — the LLM becomes the Orchestrator
                     await input.client.session.prompt({
                         path: { id: cmdInput.sessionID },
                         body: {
@@ -964,7 +964,7 @@ export const server = async (input, options) => {
                             parts: [
                                 {
                                     type: "text",
-                                    text: getFullAgentPrompt("Sentinel", skillCatalog) + `\n\nYour session ID is ${sessionId}. All state files are under \`.agents/sessions/${sessionId}/\`. You are the top-level orchestrator — you spawn ALL subagents directly. Subagent depth never exceeds 1. Use \`task_status\` to poll completion before spawning the next agent.`
+                                    text: getFullAgentPrompt("Orchestrator", skillCatalog) + `\n\nYour session ID is ${sessionId}. All state files are under \`.agents/sessions/${sessionId}/\`. You are the top-level orchestrator — you spawn ALL subagents directly. Subagent depth never exceeds 1. Use \`task_status\` to poll completion before spawning the next agent.`
                                 }
                             ]
                         }
@@ -976,7 +976,7 @@ export const server = async (input, options) => {
                         sessionID: cmdInput.sessionID,
                         messageID: genId("msg_"),
                         type: "text",
-                        text: `### 🤖 Harness Swarm Initialized\n\n**Session ID: ${sessionId}**\n\nSwarm workspace ready. You are now operating as the **Sentinel** orchestrator. Your state is under \`.agents/sessions/${sessionId}/\`. You spawn ALL subagents directly — subagent depth never exceeds 1. Use \`task_status\` to poll completion before spawning the next agent.`
+                        text: `### 🤖 Harness Swarm Initialized\n\n**Session ID: ${sessionId}**\n\nSwarm workspace ready. You are now operating as the **Orchestrator**. Your state is under \`.agents/sessions/${sessionId}/\`. You spawn ALL subagents directly — subagent depth never exceeds 1. Use \`task_status\` to poll completion before spawning the next agent.`
                     });
                 }
                 catch (error) {

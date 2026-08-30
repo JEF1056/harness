@@ -6,26 +6,26 @@ Listed in [awesome-opencode](https://github.com/awesome-opencode/awesome-opencod
 
 ## Features
 
-- **Flat hierarchy**: Sentinel spawns ALL subagents directly — subagent depth never exceeds 1
+- **Flat hierarchy**: Orchestrator spawns ALL subagents directly — subagent depth never exceeds 1
 - **Swarm Gate pipeline**: Diamond workflow with Explorer → Coder → Reviewer/Challenger phases
 - **Integrity modes**: Development, demo, and benchmark modes with escalating anti-cheating enforcement
 - **Escalation ladder**: Retry → Replace → Skip → Redistribute → Degrade for stalled agents
-- **Succession protocol**: At 8+ spawns, the Sentinel delegates to a fresh subagent to avoid context bloat
+- **Succession protocol**: At 8+ spawns, the Orchestrator delegates to a fresh subagent to avoid context bloat
 - **Handoff chain**: Each agent reads the previous agent's `handoff.md` before starting
 - **Real-time monitoring**: File watchers + heartbeat polling + TUI toast notifications
 - **Artifact-driven handoffs**: Structured 5-section `handoff.md` files with forensic verification
 - **10 methodology playbooks**: Skills synced to workspace and injected into agent prompts
 - **System prompt protection**: Decoy rules prevent prompt leakage and injection attacks
-- **Workspace locking**: Race-free exclusive file locking prevents concurrent Sentinel operations
+- **Workspace locking**: Race-free exclusive file locking prevents concurrent Orchestrator operations
 - **Lifecycle management**: `dispose` hook cleans up watchers, heartbeat, and locks; `tool.definition` hook silences debug output
 
 ## Architecture
 
-Harness runs a **9-agent swarm**. The Sentinel (top-level orchestrator) spawns ALL subagents directly — subagent depth never exceeds 1:
+Harness runs a **9-agent swarm**. The Orchestrator (top-level dispatcher) spawns ALL subagents directly — subagent depth never exceeds 1:
 
 | Agent | Role |
 |---|---|
-| Sentinel | Top-level orchestrator — runs on the main thread, spawns all subagents directly, runs the Swarm Gate loop, mode: `all`, defaultConcurrency: 5, granted `ask_question` tool |
+| Orchestrator | Top-level dispatcher — runs on the main thread, spawns all subagents directly, runs the Swarm Gate loop, mode: `all`, defaultConcurrency: 5, granted `ask_question` tool |
 | Explorer | Read-only scout — maps codebase architecture AND external research, mode: `subagent` |
 | Coder | Armed worker — implements changes, verifies builds, mode: `subagent` |
 | Reviewer | Adversarial code reviewer + integrity gate — checks correctness, quality, and anti-cheating, mode: `subagent` |
@@ -37,7 +37,7 @@ Harness runs a **9-agent swarm**. The Sentinel (top-level orchestrator) spawns A
 
 ### The Swarm Gate Loop
 
-The Sentinel runs the Swarm Gate Loop directly for each milestone (no intermediate Orchestrator):
+The Orchestrator runs the Swarm Gate Loop directly for each milestone:
 
 ```
     ┌────────────┐
@@ -79,7 +79,7 @@ The Sentinel runs the Swarm Gate Loop directly for each milestone (no intermedia
 
 ### Succession Protocol
 
-At 8+ spawns, the Sentinel delegates remaining work to a fresh subagent to avoid context bloat. The successor receives the full session state via `state.json` and `handoff.md` files.
+At 8+ spawns, the Orchestrator delegates remaining work to a fresh subagent to avoid context bloat. The successor receives the full session state via `state.json` and `handoff.md` files.
 
 ### Real-Time Monitoring
 
@@ -92,11 +92,11 @@ The plugin monitors swarm health through file watchers and a heartbeat system:
 
 ### Workspace Locking
 
-The plugin prevents concurrent Sentinel operations using race-free exclusive file locking:
+The plugin prevents concurrent Orchestrator operations using race-free exclusive file locking:
 
 - **Lock file**: `.agents/lock.json` stores the active session ID, acquisition time, and expiration
 - **TTL**: Configurable via `HARNESS_LOCK_TTL` environment variable (default: 60 seconds)
-- **Behavior**: If a Sentinel cannot acquire the lock, it displays the owner's session ID and refuses to proceed
+- **Behavior**: If an Orchestrator cannot acquire the lock, it displays the owner's session ID and refuses to proceed
 - **Release**: Lock is automatically released on `dispose()` lifecycle hook
 
 ### Lifecycle Hooks
@@ -130,7 +130,7 @@ The plugin creates the following files automatically:
 | File | Location | Description |
 |---|---|---|
 | `ORIGINAL_REQUEST.md` | Workspace root | Records the user's raw objective |
-| `prompt_draft.md` | Workspace root | Sentinel-compiled prompt (deleted and recreated per run) |
+| `prompt_draft.md` | Workspace root | Orchestrator-compiled prompt (deleted and recreated per run) |
 | `state.json` | `.agents/` | Swarm state (`status`, `objective`, `integrityMode`, `spawnCount` fields) |
 | `.warned` | `.agents/` | Deduplication set for heartbeat warnings |
 | `BRIEFING.md` | Each agent folder | Append-only identity, constraints, and workflow |
@@ -142,14 +142,14 @@ The plugin creates the following files automatically:
 
 ### `/harness [optional instructions]`
 
-Triggers the full swarm workflow. The Sentinel runs on the main thread (no separate subtask) and spawns ALL subagents directly — subagent depth never exceeds 1. Uses `task_status` for polling before spawning the next agent.
+Triggers the full swarm workflow. The Orchestrator runs on the main thread (no separate subtask) and spawns ALL subagents directly — subagent depth never exceeds 1. Uses `task_status` for polling before spawning the next agent.
 
 **Behavior**:
 - Creates `.agents/` directory and generates a unique session ID
-- Acquires a workspace lock (prevents concurrent Sentinel operations)
+- Acquires a workspace lock (prevents concurrent Orchestrator operations)
 - Records the user's objective in `ORIGINAL_REQUEST.md`
 - Initializes swarm state and starts the heartbeat monitor
-- Injects the Sentinel prompt directly into the main thread
+- Injects the Orchestrator prompt directly into the main thread
 - Displays a toast notification confirming swarm initialization
 
 **Error handling**:
@@ -265,7 +265,7 @@ export HARNESS_CODER_MODEL="qwen/qwen3.8-27b"
 
 **Method 4: Runtime Override**
 
-The Sentinel can pass an optional `model` argument via the `task` tool for per-invocation override:
+The Orchestrator can pass an optional `model` argument via the `task` tool for per-invocation override:
 
 ```
 task(subagent_type: "Explorer", prompt: "...", model: "qwen/qwen3.8-27b")
@@ -287,7 +287,7 @@ The plugin resolves the model for each subagent in the following order:
 - **Agent stalled**: Check the `.agents/<agent>/progress.md` file for the last heartbeat. The plugin will auto-escalate after 5 minutes.
 - **Agent crashed**: Look for missing `handoff.md` and `progress.md` in `.agents/<agent>/`. The heartbeat monitor will toast a crash warning.
 - **Stale warnings**: Clear the `.warned` file in `.agents/` or run `/harness` again to reset the swarm state.
-- **Workspace locked**: If you see a "Workspace Locked" error, check `.agents/lock.json` for the owner's session ID. Remove the lock file manually if the previous Sentinel crashed.
+- **Workspace locked**: If you see a "Workspace Locked" error, check `.agents/lock.json` for the owner's session ID. Remove the lock file manually if the previous Orchestrator crashed.
 - **Lock TTL exceeded**: If the lock TTL is too short for your workflow, increase it by setting the `HARNESS_LOCK_TTL` environment variable.
 
 ## Git Ignore
@@ -297,7 +297,7 @@ The `.gitignore` file includes the following entries:
 | Entry | Description |
 |---|---|
 | `.agents/` | Agent workspaces (generated, not committed) |
-| `prompt_draft.md` | Sentinel-compiled prompts (generated, not committed) |
+| `prompt_draft.md` | Orchestrator-compiled prompts (generated, not committed) |
 | `ORIGINAL_REQUEST.md` | User objectives (generated, not committed) |
 | `.DS_Store` | macOS metadata |
 | `.vscode/` | VS Code settings |
@@ -314,7 +314,7 @@ The `opencode.json` file configures the plugin's command registrations:
   "$schema": "https://opencode.ai/config.json",
   "command": {
     "harness": {
-      "description": "Trigger the harness multi-agent swarm workflow (Sentinel runs on main thread, spawns all subagents directly)",
+      "description": "Trigger the harness multi-agent swarm workflow (Orchestrator runs on main thread, spawns all subagents directly)",
       "argumentHint": "[optional instructions]",
       "template": "/harness {{arguments}}"
     },
@@ -378,7 +378,7 @@ Contains development and debugging scripts:
 
 | Version | Description |
 |---|---|
-| 1.1.0 | Flat hierarchy: Sentinel spawns all subagents directly (depth=1), handoff chain, 3-round interview, 10 skills, integrity modes |
+| 1.1.0 | Flat hierarchy: Orchestrator spawns all subagents directly (depth=1), handoff chain, 3-round interview, 10 skills, integrity modes |
 | 1.0.2 | Initial release with 11-agent swarm, workspace locking, and lifecycle management |
 
 ## Contributing
