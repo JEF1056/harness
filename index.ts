@@ -882,7 +882,43 @@ export const server: Plugin = async (input: PluginInput, options?: PluginOptions
                 }
             }
 
-            // Register slash commands programmatically so they work when installed as a plugin
+            // Inject agent-dispatch guidance into the main chat so specialized agents
+             // are preferred for relevant tasks even without /harness.
+             const agentDispatchGuide = `
+## Specialized Agent Dispatch
+When a task matches one of the specialized agents below, PREFER spawning that agent via \`task\` over doing the work yourself. This applies in ALL conversations, not just /harness runs.
+
+| Agent | Use when |
+|---|---|
+| Explorer | Mapping codebase architecture, finding files, tracing call chains, external research on libraries/APIs |
+| Coder | Implementing code changes, writing features, fixing bugs, refactoring |
+| Reviewer | Code review, checking correctness/quality, integrity scanning |
+| Challenger | Writing adversarial tests, stress testing, bug hunting |
+| Auditor | Anti-cheating verification, checking for fabricated outputs or shortcuts |
+| Debugger | Diagnosing build failures, test regressions, CI errors |
+| Cleanup | Removing test artifacts, formatting code, pre-commit cleanup |
+| VictoryAuditor | Final independent verification of completed work |
+
+**Rules:**
+- For simple one-liner questions or trivial lookups, answer directly — do NOT spawn an agent.
+- For multi-step tasks that match an agent's specialty, spawn the agent via \`task(subagent_type, prompt)\`.
+- The dispatch prompt must be self-contained: include the objective, relevant file paths, and expected output format.
+- After the agent completes, read its \`handoff.md\` and summarize the result for the user.
+- You do NOT need /harness, state.json, or .agents/ setup to dispatch a single specialized agent — just spawn it and read the handoff.
+`;
+
+             // Append the dispatch guide to the default agent's system prompt
+             const defaultAgentKey = config.agent.default || config.agent.Default || "default";
+             if (config.agent[defaultAgentKey]) {
+                 config.agent[defaultAgentKey].prompt = (config.agent[defaultAgentKey].prompt || "") + agentDispatchGuide;
+             } else {
+                 config.agent.default = {
+                     mode: "all",
+                     prompt: agentDispatchGuide
+                 };
+             }
+
+             // Register slash commands programmatically so they work when installed as a plugin
             config.command = config.command || {};
             config.command.harness = {
                 description: "Trigger the harness multi-agent swarm workflow (Orchestrator runs on main thread, spawns all subagents directly)",
