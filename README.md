@@ -174,6 +174,33 @@ Strategic artifact-driven planning. Produces a structured plan file in `.agents/
 - Injects the QWEN_OPTIMIZED_PLAN_PROMPT with the plans directory path and user request
 - Returns the planning prompt for the Planner agent to process
 
+### `/map [optional scope]`
+
+Generates or refreshes the living codebase map (`CODEBASE_MAP.md`) in the workspace root. The map is a deterministic static-analysis document (no LLM call) that lets Explorer and Coder agents skip redundant discovery.
+
+**What it produces**:
+- **Project Overview** — language, framework, build system, entry points
+- **Directory Structure** — annotated tree (compressed past depth 4)
+- **Key Files** — manifests, configs, CI
+- **Module Deep-Dives** — per-module purpose, key files, dependencies, and a pointer to `.agents/map_modules/<module>.md` for per-module public-export details
+- **Key Interfaces & APIs** — exported functions, classes, interfaces, and types per module (regex-extracted from source)
+- **Configuration** — npm scripts, env-var names, CI files
+- **Freshness** — git commit at generation time, dirty flag, and enrichment status (PENDING → VERIFIED)
+
+**Behavior**:
+- Runs `build_codebase_map()` synchronously (deterministic, no LLM)
+- Writes `CODEBASE_MAP.md` and per-module detail files to `.agents/map_modules/`
+- Spawns an **Explorer** agent to enrich the map: adds data-flow/call-chain bullets to module detail files, verifies interface signatures, and sets Freshness status to VERIFIED
+- The Explorer does NOT create `handoff.md` or other `.agents/` files
+
+**How agents use it**:
+- **Orchestrator** (Step 0 of the Swarm Gate Loop): checks the Freshness section. If the git commit matches HEAD and status is not PENDING, it skips the Explorer and passes the relevant map section directly to the Coder.
+- **Explorer**: reads only the named module section, uses it as a starting point, and updates stale sections.
+- **Coder**: reads the relevant map section named in its dispatch prompt.
+- **Main chat** (via `AGENT_DISPATCH_GUIDE`): reads the map before dispatching agents for investigation or implementation tasks.
+
+**Scope**: pass an optional scope (e.g. `/map src/services`) to focus the Explorer's enrichment on a subset. The deterministic build always covers the full project.
+
 ## Installation
 
 ### Prerequisites

@@ -4,7 +4,7 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import { QWEN_OPTIMIZED_PLAN_PROMPT } from "./plan.js";
 import { QWEN_OPTIMIZED_REPAIR_PROMPT, fetch_diagnostic_logs } from "./debug.js";
-import { build_codebase_map } from "./map.js";
+import { build_codebase_map, isMapStale, extractEnrichmentNote } from "./map.js";
 // --- 0. Skill Catalog & Workspace Sync ---
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Locate the bundled playbooks (assets/skills/*.md) shipped with the plugin.
@@ -280,10 +280,12 @@ You are the top-level orchestrator. You do NOT write code. You spawn ALL subagen
 6. **Succession**: if \`spawnCount\` reaches 8 and all subagents completed, run the Succession Protocol and stop.
 
 **The Swarm Gate Loop** (run per milestone, you dispatch every agent):
-**Step 0 — Map Check**: Before spawning agents, check if \`CODEBASE_MAP.md\` exists in the workspace root.
-    - Exists AND target scope unchanged → SKIP the Explorer. Pass the relevant map section directly to the Coder.
-    - Exists BUT target scope changed → spawn a TARGETED Explorer (scan only the changed area).
-    - Missing or stale → spawn a FULL Explorer as usual.
+**Step 0 — Map Check**: Before spawning agents, check the Freshness section of \`CODEBASE_MAP.md\` in the workspace root.
+    - Read the "Git commit at last regeneration" line and the "Enrichment status" line.
+    - **Map is FRESH**: git commit matches \`git rev-parse --short HEAD\`, status is not PENDING, AND the target scope is unchanged → SKIP the Explorer. Pass the relevant map section (by module name from "Module Deep-Dives") directly to the Coder in its dispatch prompt.
+    - **Map is STALE** (commit mismatch, PENDING, or missing) BUT the file exists → spawn a TARGETED Explorer scoped to the changed area only. Tell it which module sections to verify.
+    - **Map is MISSING** → the plugin auto-regenerates the deterministic map on session start (you do NOT need to do this). Spawn a FULL Explorer as usual to enrich it. After the Explorer completes, it will have updated CODEBASE_MAP.md.
+    - When passing a map section to the Coder, name the exact section (e.g. "the \`workers\` module section of CODEBASE_MAP.md") so it reads only that part.
 
 **Spawn plan**:
 a. Spawn an **Explorer** via \`task\` (only if Step 0 didn't skip). The Explorer maps the codebase AND investigates external context in one pass. Poll with \`task_status\`. Read its \`handoff.md\`.
@@ -292,16 +294,17 @@ b. Spawn a **Coder** via \`task\`. The Coder reads the Explorer handoff (if any)
 c. Spawn a **Reviewer** via \`task\`. Wait for completion. Read its \`handoff.md\`. Then spawn a **Challenger** via \`task\`. Wait for completion. Read its \`handoff.md\`.
    - The Reviewer checks correctness, logic, quality, AND integrity (anti-cheating scan). If the Reviewer finds an integrity violation, it tags the finding as INTEGRITY VIOLATION and the gate fails.
    - The Challenger writes and runs adversarial tests.
-d. **Gate evaluation** — ALL gates must pass:
-   | Gate | Pass condition |
-   |------|----------------|
-   | Build/Tests | Build and tests pass, verified by the Challenger's execution |
-   | Reviewer | Verdict APPROVE (no INTEGRITY VIOLATION tag) |
-   | Challenger | No empirically reproduced bug |
-   - ALL pass → milestone complete.
-   - Reviewer REQUEST_CHANGES or Challenger found a real bug → loop back to (b) with the findings attached to the dispatch.
-   - INTEGRITY VIOLATION → milestone FAILS. Loop back to (a) with the audit evidence.
-   - **Escalation tier**: if the same gate has failed twice, spawn a second **Reviewer** and a second **Challenger** and require BOTH reviewers to approve. If the task is high-stakes (benchmark mode, production), also spawn a separate **Auditor** for a forensic integrity scan.
+   d. **Gate evaluation** — ALL gates must pass:
+    | Gate | Pass condition |
+    |------|----------------|
+    | Build/Tests | Build and tests pass, verified by the Challenger's execution |
+    | Reviewer | Verdict APPROVE (no INTEGRITY VIOLATION tag) |
+    | Challenger | No empirically reproduced bug |
+    - ALL pass → milestone complete.
+    - Reviewer REQUEST_CHANGES or Challenger found a real bug → loop back to (b) with the findings attached to the dispatch.
+    - INTEGRITY VIOLATION → milestone FAILS. Loop back to (a) with the audit evidence.
+    - **Escalation tier**: if the same gate has failed twice, spawn a second **Reviewer** and a second **Challenger** and require BOTH reviewers to approve. If the task is high-stakes (benchmark mode, production), also spawn a separate **Auditor** for a forensic integrity scan.
+    e. **Map refresh** (after the gate passes, before the next milestone): if the Coder changed files that affect module structure, public exports, or configuration, spawn a quick **Explorer** with this exact instruction: "Update CODEBASE_MAP.md to reflect the changes from the last milestone. Read the Coder's handoff.md for the list of changed files. Update the affected Module Deep-Dives, Key Interfaces & APIs, and the Freshness section (set Enrichment status to VERIFIED and note the commit). Do NOT create handoff.md. Do NOT create files under .agents/. Edit CODEBASE_MAP.md in place only." If no structural changes were made, skip this step.
 
 **Phase 3 — Pre-Victory Cleanup**:
 7. After all milestones complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. Read its \`handoff.md\`.
@@ -343,22 +346,33 @@ You are a fast reconnaissance agent. You NEVER write or modify code. Your tools 
  </speed_rules>
 
  <workflow>
-1. Read the objective and your \`DISPATCH.md\` provided by the Orchestrator.
-2. Check if \`CODEBASE_MAP.md\` exists. If it does, read ONLY the relevant section the Orchestrator names.
-3. Use the map as a starting point. Verify only the specific files the objective touches.
-4. Find the files that need modification. Read the relevant sections (not entire files).
-5. **External research** (only if needed, max 3 searches): find official docs, cite sources.
-6. If the map section is missing or stale, update it directly.
-7. Produce a structured \`handoff.md\` recommending a fix strategy. Include a "Map Updates" section and a "Research Findings" section (with cited sources) if applicable.
- </workflow>
+ 1. Read the objective and your \`DISPATCH.md\` provided by the Orchestrator.
+ 2. Check if \`CODEBASE_MAP.md\` exists. If it does, read ONLY the relevant section the Orchestrator names (use the module name from "Module Deep-Dives" as the section key).
+ 3. Use the map as a starting point. Verify only the specific files the objective touches.
+ 4. Find the files that need modification. Read the relevant sections (not entire files).
+ 5. **External research** (only if needed, max 3 searches): find official docs, cite sources.
+ 6. If the map section is missing or stale, update it directly (see Map Update Protocol below).
+ 7. Produce a structured \`handoff.md\` recommending a fix strategy. Include a "Map Updates" section and a "Research Findings" section (with cited sources) if applicable.
+  </workflow>
 
- <constraints>
-- Do NOT run build commands unless explicitly asked to gather error logs.
-- Do NOT re-read a file you already read.
-- If you find conflicting information, note it in handoff and move on.
-- Always update CODEBASE_MAP.md if you discover it is stale or incomplete.
-- Prefer codebase evidence over web speculation. Cite sources for web-based findings.
- </constraints>
+  <map_update_protocol>
+ When your dispatch says to update CODEBASE_MAP.md (map-refresh task), do ONLY this:
+ 1. Read the Coder's handoff.md to get the list of changed files.
+ 2. For each changed file, update the corresponding section in CODEBASE_MAP.md:
+    - Module Deep-Dives: update Key Files and Dependencies if they changed.
+    - Key Interfaces & APIs: update signatures for changed exports.
+    - Freshness: set "Enrichment status" to "VERIFIED" and add a one-line note of what changed.
+ 3. Do NOT rewrite sections that did not change. Do NOT create handoff.md. Do NOT create files under .agents/.
+ 4. Edit CODEBASE_MAP.md in place only.
+  </map_update_protocol>
+
+  <constraints>
+ - Do NOT run build commands unless explicitly asked to gather error logs.
+ - Do NOT re-read a file you already read.
+ - If you find conflicting information, note it in handoff and move on.
+ - Always update CODEBASE_MAP.md if you discover it is stale or incomplete.
+ - Prefer codebase evidence over web speculation. Cite sources for web-based findings.
+  </constraints>
 
  <skill_loading>
 Load audit and validation playbooks (e.g., \`test-coverage-audit.md\`) from the Skill Catalog if the dispatch prompt names them.
@@ -577,7 +591,171 @@ You are a cleanup and quality agent that prepares the codebase for final submiss
 function getFullAgentPrompt(role, skillCatalog) {
     return `${buildSwarmMechanics(skillCatalog)}\n\n${AGENT_PROMPTS[role]}`;
 }
+// Build a compact digest of CODEBASE_MAP.md for injection into the main chat's
+// system prompt. Keeps the model aware of module boundaries and public APIs
+// without reading the full file. Capped at ~1500 chars.
+function buildMapDigest(workspaceRoot) {
+    const mapPath = path.join(workspaceRoot, "CODEBASE_MAP.md");
+    let content;
+    try {
+        content = fs.readFileSync(mapPath, "utf8");
+    }
+    catch {
+        return null;
+    }
+    if (content.length < 100)
+        return null;
+    const lines = [];
+    lines.push("## Codebase Map Digest (from CODEBASE_MAP.md)");
+    lines.push("");
+    // Project Overview
+    const overviewMatch = content.match(/## Project Overview\n\n([\s\S]*?)(?=\n## )/);
+    if (overviewMatch) {
+        for (const line of overviewMatch[1].trim().split("\n")) {
+            const trimmed = line.trim();
+            // Handle both "- **Key**: value" and "- Key: value" formats
+            const boldMatch = trimmed.match(/^- \*\*([^*]+)\*\*: (.+)$/);
+            const plainMatch = trimmed.match(/^- ([A-Z][a-zA-Z ]+): (.+)$/);
+            const m = boldMatch || plainMatch;
+            if (m) {
+                const value = m[2].replace(/\n\s*-\s*/g, " ").slice(0, 120);
+                lines.push(`- ${m[1]}: ${value}`);
+            }
+        }
+    }
+    // Module names from Deep-Dives section only
+    const deepDiveSection = content.match(/## Module Deep-Dives\n\n([\s\S]*?)(?=\n## )/);
+    if (deepDiveSection) {
+        const moduleNames = [];
+        const modRe = /^### (.+)$/gm;
+        let mm;
+        while ((mm = modRe.exec(deepDiveSection[1])) !== null) {
+            moduleNames.push(mm[1].trim());
+        }
+        if (moduleNames.length > 0) {
+            lines.push(`- Modules: ${moduleNames.join(", ")}`);
+        }
+    }
+    // Key Interfaces: top 5 signatures per module (max 10 total)
+    const ifaceSection = content.match(/## Key Interfaces & APIs\n\n([\s\S]*?)(?=\n## )/);
+    if (ifaceSection) {
+        const ifaceLines = ifaceSection[1].split("\n");
+        let currentModule = "";
+        let count = 0;
+        for (const line of ifaceLines) {
+            const modMatch = line.match(/^### (.+)$/);
+            if (modMatch) {
+                currentModule = modMatch[1].trim();
+                lines.push(`  [${currentModule}]`);
+                continue;
+            }
+            const sigMatch = line.match(/^-\s+`([^`]+)`\s+—\s+`([^`]+)`$/);
+            if (sigMatch && count < 10) {
+                lines.push(`  - \`${sigMatch[1]}\` → \`${sigMatch[2]}\``);
+                count++;
+            }
+        }
+    }
+    // Freshness
+    const freshMatch = content.match(/## Freshness\n\n([\s\S]*?)(?=\n## |\n---|$)/);
+    if (freshMatch) {
+        const commitLine = freshMatch[1].match(/Git commit at last regeneration: ([^\n]+)/);
+        const statusLine = freshMatch[1].match(/Enrichment status: ([^\n]+)/);
+        if (commitLine)
+            lines.push(`- Map freshness: commit ${commitLine[1].trim()}`);
+        if (statusLine)
+            lines.push(`- Enrichment: ${statusLine[1].trim()}`);
+    }
+    const digest = lines.join("\n");
+    return digest.length > 1500 ? digest.slice(0, 1500) + "\n… (truncated — read CODEBASE_MAP.md for full detail)" : digest;
+}
+// --- 6. Specialized Agent Dispatch Guide (main chat) ---
+// Injected into the main chat's system prompt via the experimental.chat.system.transform
+// hook so the default agent delegates to harness subagents (via the task tool) instead of
+// doing the work itself and blowing up its own context.
+const AGENT_DISPATCH_GUIDE = `
+## Specialized Agent Dispatch (ALWAYS ACTIVE)
+You have access to specialized subagents via the \`task\` tool. **Use them by default** for any task that matches their specialty. Do NOT do specialized work yourself when an agent exists for it.
+
+| Agent | Use when | Examples |
+|---|---|---|
+| Coder | Implementing features, fixing bugs, refactoring, writing code | "Add a dark mode toggle", "Fix the login bug", "Refactor the API layer" |
+| Explorer | Finding files, mapping architecture, researching libraries/APIs | "Where is the auth logic?", "How does the payment flow work?", "What's the best way to do X in React?" |
+| Reviewer | Code review, checking quality, finding issues | "Review my changes", "Is this code correct?", "Check for security issues" |
+| Challenger | Writing tests, stress testing, bug hunting | "Write tests for this module", "Find edge cases in this function" |
+| Debugger | Build failures, test regressions, runtime errors | "The build is failing", "Tests broke after my change", "Debug this crash" |
+| Cleanup | Formatting, removing artifacts, pre-commit cleanup | "Clean up before commit", "Format the code", "Remove test artifacts" |
+| Auditor | Verifying authenticity, checking for shortcuts | "Verify this implementation is genuine", "Check for hardcoded outputs" |
+| VictoryAuditor | Final verification of completed work | "Verify the feature works end-to-end" |
+
+**Decision rules:**
+1. **Trivial** (one-liner, single file read, simple question) → answer directly, no agent.
+2. **Code change** (implement, fix, refactor) → spawn **Coder**. Always.
+3. **Investigation** (find, trace, research) → spawn **Explorer**. Always.
+4. **Review** (check, audit, verify quality) → spawn **Reviewer**. Always.
+5. **Testing** (write tests, stress test) → spawn **Challenger**. Always.
+6. **Broken** (build fail, test fail, crash) → spawn **Debugger**. Always.
+7. **Multi-step** (complex task) → chain agents: Explorer → Coder → Reviewer.
+
+**Dispatch format:**
+The prompt you pass to \`task\` must be self-contained. Include:
+- The objective (what to do)
+- Relevant file paths or code context
+- Expected output (what "done" looks like)
+
+**Example — user says "Add a dark mode toggle to the settings page":**
+\`\`\`
+task("Coder", "Implement a dark mode toggle in the settings page. The settings page is at src/pages/Settings.tsx. The theme context is at src/context/ThemeContext.tsx. Add a toggle switch that persists to localStorage. Run the build to verify it compiles.")
+\`\`\`
+
+**Example — user says "Why is the login broken?":**
+\`\`\`
+task("Debugger", "The login flow is broken. Users report a 500 error when submitting credentials. The auth logic is in src/api/auth.ts and src/middleware/session.ts. Find the root cause and fix it. Run the test suite to verify.")
+\`\`\`
+
+**Example — user says "Review my changes":**
+\`\`\`
+task("Reviewer", "Review the changes I just made to the payment processing module in src/payments/. Check for correctness, edge cases, and security issues. The git diff shows changes to processPayment.ts and refund.ts.")
+\`\`\`
+
+**Codebase map (ALWAYS ACTIVE when CODEBASE_MAP.md exists):**
+ - A **Codebase Map Digest** is appended to your system prompt when \`CODEBASE_MAP.md\` exists. It lists modules, key interfaces, and freshness. Use it as your first reference for ANY question about the codebase — before spawning an agent, before reading files, before answering.
+ - **Answering "where is X?" / "how does Y work?"**: check the digest's module list and interface signatures first. If the digest names the right module and file, read that file directly (or dispatch a Coder/Explorer with the exact file path). Do NOT spawn an Explorer for a lookup the digest already answers.
+ - **Dispatching agents**: always name the relevant module section in the dispatch prompt (e.g. "the \`workers\` module — see CODEBASE_MAP.md section 'Key Interfaces & APIs' → workers"). The agent will read only that section.
+ - **Staleness**: if the digest shows a commit hash that doesn't match \`git rev-parse --short HEAD\`, or says "Enrichment: PENDING", the map may be stale. For critical work, run \`/map\` first. For minor questions, proceed but note the staleness.
+ - **After code changes**: if you or an agent modified module structure, public exports, or config, remind the user that \`/map\` should be re-run to refresh the digest.
+
+**Rules:**
+ - You do NOT need /harness, state.json, or .agents/ setup to dispatch an agent.
+ - After the agent completes, read its \`handoff.md\` and summarize the result for the user.
+ - If the agent's handoff is insufficient, spawn a follow-up agent with more specific instructions.
+ - For multi-step tasks, chain agents: the output of one becomes context for the next.
+ `;
 // --- 5. Server Plugin Entry Point ---
+// Auto-refresh the deterministic map if it exists but is stale (commit mismatch).
+// Preserves the Explorer's enrichment note. Rate-limited to once per 60s to avoid
+// re-scanning on every chat turn. Returns true if a refresh happened.
+let lastAutoRefresh = 0;
+function tryAutoRefreshMap(workspaceRoot) {
+    const now = Date.now();
+    if (now - lastAutoRefresh < 60_000)
+        return false;
+    lastAutoRefresh = now;
+    try {
+        const mapPath = path.join(workspaceRoot, "CODEBASE_MAP.md");
+        if (!fs.existsSync(mapPath))
+            return false;
+        if (!isMapStale(workspaceRoot))
+            return false;
+        const note = extractEnrichmentNote(workspaceRoot);
+        const freshDoc = build_codebase_map(workspaceRoot, { agentsDir: path.join(workspaceRoot, ".agents"), enrichmentNote: note });
+        fs.writeFileSync(mapPath, freshDoc, "utf8");
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 export const server = async (input, options) => {
     const workspaceRoot = input.directory || process.cwd();
     const agentsDir = path.join(workspaceRoot, '.agents');
@@ -897,70 +1075,11 @@ export const server = async (input, options) => {
                     agent.mode = "all";
                 }
             }
-            // Inject agent-dispatch guidance into the main chat so specialized agents
-            // are preferred for relevant tasks even without /harness.
-            const agentDispatchGuide = `
-## Specialized Agent Dispatch (ALWAYS ACTIVE)
-You have access to specialized subagents via the \`task\` tool. **Use them by default** for any task that matches their specialty. Do NOT do specialized work yourself when an agent exists for it.
-
-| Agent | Use when | Examples |
-|---|---|---|
-| Coder | Implementing features, fixing bugs, refactoring, writing code | "Add a dark mode toggle", "Fix the login bug", "Refactor the API layer" |
-| Explorer | Finding files, mapping architecture, researching libraries/APIs | "Where is the auth logic?", "How does the payment flow work?", "What's the best way to do X in React?" |
-| Reviewer | Code review, checking quality, finding issues | "Review my changes", "Is this code correct?", "Check for security issues" |
-| Challenger | Writing tests, stress testing, bug hunting | "Write tests for this module", "Find edge cases in this function" |
-| Debugger | Build failures, test regressions, runtime errors | "The build is failing", "Tests broke after my change", "Debug this crash" |
-| Cleanup | Formatting, removing artifacts, pre-commit cleanup | "Clean up before commit", "Format the code", "Remove test artifacts" |
-| Auditor | Verifying authenticity, checking for shortcuts | "Verify this implementation is genuine", "Check for hardcoded outputs" |
-| VictoryAuditor | Final verification of completed work | "Verify the feature works end-to-end" |
-
-**Decision rules:**
-1. **Trivial** (one-liner, single file read, simple question) → answer directly, no agent.
-2. **Code change** (implement, fix, refactor) → spawn **Coder**. Always.
-3. **Investigation** (find, trace, research) → spawn **Explorer**. Always.
-4. **Review** (check, audit, verify quality) → spawn **Reviewer**. Always.
-5. **Testing** (write tests, stress test) → spawn **Challenger**. Always.
-6. **Broken** (build fail, test fail, crash) → spawn **Debugger**. Always.
-7. **Multi-step** (complex task) → chain agents: Explorer → Coder → Reviewer.
-
-**Dispatch format:**
-The prompt you pass to \`task\` must be self-contained. Include:
-- The objective (what to do)
-- Relevant file paths or code context
-- Expected output (what "done" looks like)
-
-**Example — user says "Add a dark mode toggle to the settings page":**
-\`\`\`
-task("Coder", "Implement a dark mode toggle in the settings page. The settings page is at src/pages/Settings.tsx. The theme context is at src/context/ThemeContext.tsx. Add a toggle switch that persists to localStorage. Run the build to verify it compiles.")
-\`\`\`
-
-**Example — user says "Why is the login broken?":**
-\`\`\`
-task("Debugger", "The login flow is broken. Users report a 500 error when submitting credentials. The auth logic is in src/api/auth.ts and src/middleware/session.ts. Find the root cause and fix it. Run the test suite to verify.")
-\`\`\`
-
-**Example — user says "Review my changes":**
-\`\`\`
-task("Reviewer", "Review the changes I just made to the payment processing module in src/payments/. Check for correctness, edge cases, and security issues. The git diff shows changes to processPayment.ts and refund.ts.")
-\`\`\`
-
-**Rules:**
-- You do NOT need /harness, state.json, or .agents/ setup to dispatch an agent.
-- After the agent completes, read its \`handoff.md\` and summarize the result for the user.
-- If the agent's handoff is insufficient, spawn a follow-up agent with more specific instructions.
-- For multi-step tasks, chain agents: the output of one becomes context for the next.
-`;
-            // Append the dispatch guide to the default agent's system prompt
-            const defaultAgentKey = config.agent.default || config.agent.Default || "default";
-            if (config.agent[defaultAgentKey]) {
-                config.agent[defaultAgentKey].prompt = (config.agent[defaultAgentKey].prompt || "") + agentDispatchGuide;
-            }
-            else {
-                config.agent.default = {
-                    mode: "all",
-                    prompt: agentDispatchGuide
-                };
-            }
+            // The dispatch guide is applied via the experimental.chat.system.transform
+            // hook (see the returned hooks below). NOTE: do NOT inject it via
+            // config.agent.default — opencode only merges config agents into native
+            // agents (build, plan, general, explore, ...), so a "default" entry is a
+            // dead config that never reaches the main chat.
             // Register slash commands programmatically so they work when installed as a plugin
             config.command = config.command || {};
             config.command.harness = {
@@ -1116,11 +1235,15 @@ task("Reviewer", "Review the changes I just made to the payment processing modul
             else if (command === "map") {
                 const scope = args.trim() || null;
                 try {
-                    const mapDoc = build_codebase_map(workspaceRoot, { scope: scope || undefined });
+                    const agentsDir = path.join(workspaceRoot, ".agents");
+                    const mapDoc = build_codebase_map(workspaceRoot, { scope: scope || undefined, agentsDir });
                     const mapPath = path.join(workspaceRoot, "CODEBASE_MAP.md");
                     fs.writeFileSync(mapPath, mapDoc, "utf8");
-                    // Launch Explorer agents to validate and enrich the generated map
-                    const explorerPrompt = getFullAgentPrompt("Explorer", skillCatalog) + `\n\nYou have just run the /map command which generated CODEBASE_MAP.md at ${mapPath}. Your job is to verify the map is accurate and complete by exploring the codebase. Focus on the ${scope || "full project"} scope. Read the generated map, then traverse the codebase to verify its accuracy. Update the map if you find errors or omissions. Write a handoff.md summarizing your findings.`;
+                    // Extract module names for the Explorer prompt
+                    const moduleMatch = mapDoc.match(/### ([^\n]+)/g);
+                    const moduleNames = moduleMatch ? moduleMatch.map(m => m.replace("### ", "")).join(", ") : "none";
+                    // Launch Explorer to enrich the generated map
+                    const explorerPrompt = getFullAgentPrompt("Explorer", skillCatalog) + `\n\n/map command has generated CODEBASE_MAP.md at ${mapPath}. The modules listed in "Module Deep-Dives" are: ${moduleNames}.\n\nYour job (enrichment only — do NOT rewrite the deterministic sections):\n1. Read CODEBASE_MAP.md.\n2. For each module, read the top 1-2 key files and add a "Data flow / call chains" bullet to the module detail file at .agents/map_modules/<module>.md (entry point -> core functions -> persistence/IO, with file:line refs).\n3. Verify "Key Interfaces & APIs" signatures against the actual code. Fix any that are wrong.\n4. In the Freshness section, replace "Enrichment status: PENDING" with "Enrichment status: VERIFIED" plus a one-line note.\n5. Do NOT create handoff.md. Do NOT create files under .agents/ except .agents/map_modules/*.md. Edit CODEBASE_MAP.md and the module detail files in place only.\n\nFocus scope: ${scope || "full project"}.`;
                     await input.client.session.prompt({
                         path: { id: cmdInput.sessionID },
                         body: {
@@ -1138,7 +1261,7 @@ task("Reviewer", "Review the changes I just made to the payment processing modul
                         sessionID: cmdInput.sessionID,
                         messageID: genId("msg_"),
                         type: "text",
-                        text: `### 🗺️ Codebase Map Generated & Explorer Launched\n\n\`CODEBASE_MAP.md\` has been created/updated at the workspace root.\n\nScope: ${scope || "Full project"}\n\nAn Explorer agent has been spawned to validate and enrich the map. The Explorer will verify accuracy, update stale sections, and write a handoff.md with findings.`
+                        text: `### 🗺️ Codebase Map Generated & Explorer Launched\n\n\`CODEBASE_MAP.md\` has been created/updated at the workspace root.\n\nScope: ${scope || "Full project"}\nModules: ${moduleNames}\n\nAn Explorer agent has been spawned to enrich the map (data-flow chains, signature verification). It will update the Freshness section to VERIFIED when done.`
                     });
                 }
                 catch (error) {
@@ -1149,6 +1272,35 @@ task("Reviewer", "Review the changes I just made to the payment processing modul
                         type: "text",
                         text: `Error generating map: ${error.message}`
                     });
+                }
+            }
+        },
+        "experimental.chat.system.transform": async (_input, output) => {
+            // Append the specialized-agent dispatch guide + codebase map digest to the
+            // assembled system prompt so the main chat delegates to harness subagents
+            // and stays aware of module boundaries without reading files itself.
+            //
+            // IMPORTANT: Qwen-family chat templates (served by llama.cpp / LM Studio /
+            // ollama backends) raise "System message must be at the beginning" if a
+            // second system message is appended to the request. So we must keep the
+            // system array to at most ONE entry: merge the guide into the existing
+            // system prompt instead of pushing a new element.
+            if (Array.isArray(output.system)) {
+                const marker = "## Specialized Agent Dispatch (ALWAYS ACTIVE)";
+                const existing = output.system.filter((s) => typeof s === "string" && s.length > 0);
+                const alreadyInjected = existing.some((s) => s.includes(marker));
+                if (!alreadyInjected) {
+                    tryAutoRefreshMap(workspaceRoot);
+                    const mapDigest = buildMapDigest(workspaceRoot);
+                    const additions = AGENT_DISPATCH_GUIDE + (mapDigest ? "\n\n" + mapDigest : "");
+                    if (existing.length === 0) {
+                        output.system.length = 0;
+                        output.system.push(additions);
+                    }
+                    else {
+                        output.system.length = 0;
+                        output.system.push(existing.join("\n\n") + "\n\n" + additions);
+                    }
                 }
             }
         },
