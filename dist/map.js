@@ -419,6 +419,13 @@ function inferModulePurpose(dirName, dirPath) {
     catch { }
     return `Module in ${dirName}/ directory`;
 }
+function isTestFile(file) {
+    const parts = file.split(path.sep);
+    if (parts.some(p => /^(test|tests|__tests__|spec|specs)$/.test(p)))
+        return true;
+    const base = path.basename(file);
+    return /\.test\.[cm]?[jt]sx?$/.test(base) || /\.spec\.[cm]?[jt]sx?$/.test(base);
+}
 function extractInterfaces(root, excludes, sourceFiles) {
     const seenFiles = new Set();
     const maxPerFile = 8;
@@ -430,6 +437,8 @@ function extractInterfaces(root, excludes, sourceFiles) {
         if (![".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].includes(ext))
             return null;
         if (f.endsWith(".d.ts"))
+            return null;
+        if (isTestFile(f))
             return null;
         let content;
         try {
@@ -785,10 +794,13 @@ export function readFreshness(workspaceRoot) {
     return { gitCommit, dirty, lastRegenerated, enriched, recordedCommit };
 }
 /**
- * Returns true when the map's recorded git commit differs from HEAD, meaning the
- * deterministic sections are stale and should be regenerated. A dirty working tree
- * alone does NOT make the map stale (the map reflects the last committed state plus
- * any uncommitted changes the Explorer has since verified).
+ * Returns true when the map's recorded git commit differs from HEAD AND at least
+ * one non-map file changed in between, meaning the deterministic sections are
+ * stale and should be regenerated. A dirty working tree alone does NOT make the
+ * map stale (the map reflects the last committed state plus any uncommitted
+ * changes the Explorer has since verified). Commits that only touch
+ * CODEBASE_MAP.md (e.g. committing the map itself) do NOT count as stale —
+ * without this check, regenerate → commit → regenerate churns forever.
  */
 export function isMapStale(workspaceRoot) {
     const f = readFreshness(workspaceRoot);
@@ -798,7 +810,24 @@ export function isMapStale(workspaceRoot) {
         return true;
     if (f.gitCommit === "unknown" || f.gitCommit === "not-a-git-repo")
         return false;
-    return f.recordedCommit !== f.gitCommit;
+    if (f.recordedCommit === f.gitCommit)
+        return false;
+    try {
+        const changed = execSync(`git diff --name-only ${f.recordedCommit}..HEAD`, {
+            cwd: workspaceRoot,
+            stdio: ["pipe", "pipe", "pipe"],
+        }).toString().trim();
+        return changed
+            .split("\n")
+            .some(line => {
+            const l = line.trim();
+            // CODEBASE_MAP.md and .agents/ are map/agent metadata, not code.
+            return l.length > 0 && l !== "CODEBASE_MAP.md" && !l.startsWith(".agents/");
+        });
+    }
+    catch {
+        return true;
+    }
 }
 /**
  * Extract the Explorer's enrichment note from an existing map so it can be
@@ -828,6 +857,74 @@ export function mergeEnrichment(freshDoc, note) {
     if (!note)
         return freshDoc;
     return freshDoc.replace(/- Enrichment status: PENDING[^\n]*/, `- Enrichment status: VERIFIED\n- Enrichment note: ${note}`);
+}
+const INTERFACES_SECTION_RE = /^## Key Interfaces & APIs\n[\s\S]*?(?=\n## )/m;
+/**
+ * Extract the existing "Key Interfaces & APIs" section (header through the
+ * next top-level section) verbatim, or null when the map has no such section.
+ * This section accumulates Explorer-verified signatures, so deterministic
+ * regeneration must preserve it instead of rebuilding from regex scans.
+ */
+export function extractInterfacesSection(content) {
+    const m = content.match(INTERFACES_SECTION_RE);
+    return m ? m[0] : null;
+}
+function splitModuleBlocks(section) {
+    const out = [];
+    const body = section.replace(/^## Key Interfaces & APIs\n/, "");
+    for (const part of body.split(/\n### /)) {
+        const nl = part.indexOf("\n");
+        if (nl === -1)
+            continue;
+        const mod = part.slice(0, nl).trim();
+        const lines = part.slice(nl + 1).split("\n").map(l => l.trim()).filter(l => l.startsWith("- "));
+        if (mod)
+            out.push({ mod, lines });
+    }
+    return out;
+}
+/**
+ * Merge a preserved "Key Interfaces & APIs" section into a freshly-generated
+ * map document. Per-module union: the deterministic (fresh) signatures stay,
+ * and preserved (Explorer-curated) signature lines are appended when not
+ * already present — so manual enrichment survives deterministic regeneration
+ * while new exports still appear automatically. Modules that only exist in the
+ * preserved section are appended. If the fresh doc has no interfaces section
+ * (no exports found), the preserved one is inserted before "## Configuration"
+ * (or "## Freshness").
+ */
+export function withInterfacesSection(freshDoc, preserved) {
+    const freshMatch = freshDoc.match(INTERFACES_SECTION_RE);
+    const preservedModules = splitModuleBlocks(preserved);
+    if (!freshMatch) {
+        const anchor = freshDoc.includes("## Configuration") ? "## Configuration" : "## Freshness";
+        const idx = freshDoc.indexOf(anchor);
+        if (idx === -1)
+            return freshDoc + "\n" + preserved + "\n";
+        return freshDoc.slice(0, idx) + preserved + "\n\n" + freshDoc.slice(idx);
+    }
+    const freshModules = splitModuleBlocks(freshMatch[0]);
+    let merged = "## Key Interfaces & APIs\n";
+    const seenMods = new Set();
+    for (const { mod, lines } of freshModules) {
+        seenMods.add(mod);
+        merged += `\n### ${mod}\n\n${lines.join("\n")}\n`;
+    }
+    for (const { mod, lines } of preservedModules) {
+        if (seenMods.has(mod)) {
+            const freshLines = freshModules.find(m => m.mod === mod).lines;
+            const missing = lines.filter(l => !freshLines.includes(l));
+            if (missing.length > 0) {
+                const all = [...freshLines, ...missing];
+                merged = merged.replace(`\n### ${mod}\n\n${freshLines.join("\n")}\n`, `\n### ${mod}\n\n${all.join("\n")}\n`);
+            }
+        }
+        else {
+            seenMods.add(mod);
+            merged += `\n### ${mod}\n\n${lines.join("\n")}\n`;
+        }
+    }
+    return freshDoc.replace(INTERFACES_SECTION_RE, merged);
 }
 function estimateTokens(text) {
     return Math.ceil(text.length / 4);

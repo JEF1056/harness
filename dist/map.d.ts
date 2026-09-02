@@ -14,10 +14,13 @@ export interface FreshnessInfo {
 export declare function build_codebase_map(workspaceRoot: string, options?: MapOptions): string;
 export declare function readFreshness(workspaceRoot: string): FreshnessInfo | null;
 /**
- * Returns true when the map's recorded git commit differs from HEAD, meaning the
- * deterministic sections are stale and should be regenerated. A dirty working tree
- * alone does NOT make the map stale (the map reflects the last committed state plus
- * any uncommitted changes the Explorer has since verified).
+ * Returns true when the map's recorded git commit differs from HEAD AND at least
+ * one non-map file changed in between, meaning the deterministic sections are
+ * stale and should be regenerated. A dirty working tree alone does NOT make the
+ * map stale (the map reflects the last committed state plus any uncommitted
+ * changes the Explorer has since verified). Commits that only touch
+ * CODEBASE_MAP.md (e.g. committing the map itself) do NOT count as stale —
+ * without this check, regenerate → commit → regenerate churns forever.
  */
 export declare function isMapStale(workspaceRoot: string): boolean;
 /**
@@ -30,4 +33,22 @@ export declare function extractEnrichmentNote(workspaceRoot: string): string | n
  * Replaces the "Enrichment status: PENDING" line with VERIFIED + the note.
  */
 export declare function mergeEnrichment(freshDoc: string, note: string | null): string;
+/**
+ * Extract the existing "Key Interfaces & APIs" section (header through the
+ * next top-level section) verbatim, or null when the map has no such section.
+ * This section accumulates Explorer-verified signatures, so deterministic
+ * regeneration must preserve it instead of rebuilding from regex scans.
+ */
+export declare function extractInterfacesSection(content: string): string | null;
+/**
+ * Merge a preserved "Key Interfaces & APIs" section into a freshly-generated
+ * map document. Per-module union: the deterministic (fresh) signatures stay,
+ * and preserved (Explorer-curated) signature lines are appended when not
+ * already present — so manual enrichment survives deterministic regeneration
+ * while new exports still appear automatically. Modules that only exist in the
+ * preserved section are appended. If the fresh doc has no interfaces section
+ * (no exports found), the preserved one is inserted before "## Configuration"
+ * (or "## Freshness").
+ */
+export declare function withInterfacesSection(freshDoc: string, preserved: string): string;
 export declare function get_delta_sections(workspaceRoot: string, changedFiles: string[]): string[];

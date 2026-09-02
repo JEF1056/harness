@@ -4,7 +4,7 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import { QWEN_OPTIMIZED_PLAN_PROMPT } from "./plan.js";
 import { QWEN_OPTIMIZED_REPAIR_PROMPT, fetch_diagnostic_logs } from "./debug.js";
-import { build_codebase_map, isMapStale, extractEnrichmentNote } from "./map.js";
+import { build_codebase_map, isMapStale, extractEnrichmentNote, extractInterfacesSection, withInterfacesSection } from "./map.js";
 // --- 0. Skill Catalog & Workspace Sync ---
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Locate the bundled playbooks (assets/skills/*.md) shipped with the plugin.
@@ -271,11 +271,9 @@ You are the top-level orchestrator. You do NOT write code. You spawn ALL subagen
 4. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
 
 **The Swarm Gate Loop** (run per milestone, you dispatch every agent):
-**Step 0 — Map Check**: Before spawning agents, check the Freshness section of \`CODEBASE_MAP.md\` in the workspace root.
-    - Read the "Git commit at last regeneration" line and the "Enrichment status" line.
-    - **Map is FRESH**: git commit matches \`git rev-parse --short HEAD\`, status is not PENDING, AND the target scope is unchanged → SKIP the Explorer. Pass the relevant map section (by module name from "Module Deep-Dives") directly to the Coder in its dispatch prompt.
-    - **Map is STALE** (commit mismatch, PENDING, or missing) BUT the file exists → spawn a TARGETED Explorer scoped to the changed area only. Tell it which module sections to verify.
-    - **Map is MISSING** → the plugin auto-regenerates the deterministic map on session start (you do NOT need to do this). Spawn a FULL Explorer as usual to enrich it. After the Explorer completes, it will have updated CODEBASE_MAP.md.
+**Step 0 — Map Check**: The plugin auto-regenerates the deterministic sections of \`CODEBASE_MAP.md\` (structure, files, Freshness) whenever code commits move, and preserves the curated "Key Interfaces & APIs" section. Staleness is therefore SELF-HEALING — it is NEVER a reason to spawn an agent.
+    - **Map exists** (any Freshness state) → pass the relevant map section (by module name from "Module Deep-Dives") directly to the Coder in its dispatch prompt. Do NOT spawn an Explorer for staleness alone.
+    - **Map is MISSING** → the plugin auto-regenerates the deterministic map on session start (you do NOT need to do this). If it is still missing when you actually need it, spawn a FULL Explorer to build + enrich it.
     - When passing a map section to the Coder, name the exact section (e.g. "the \`workers\` module section of CODEBASE_MAP.md") so it reads only that part.
 
 **Spawn plan**:
@@ -295,7 +293,7 @@ c. Spawn a **Reviewer** via \`task\`. Wait for completion. Read its \`handoff.md
     - Reviewer REQUEST_CHANGES or Challenger found a real bug → loop back to (b) with the findings attached to the dispatch.
     - INTEGRITY VIOLATION → milestone FAILS. Loop back to (a) with the audit evidence.
     - **Escalation tier**: if the same gate has failed twice, spawn a second **Reviewer** and a second **Challenger** and require BOTH reviewers to approve. If the task is high-stakes (benchmark mode, production), also spawn a separate **Auditor** for a forensic integrity scan.
-    e. **Map refresh** (after the gate passes, before the next milestone): if the Coder changed files that affect module structure, public exports, or configuration, spawn a quick **Explorer** with this exact instruction: "Update CODEBASE_MAP.md to reflect the changes from the last milestone. Read the Coder's handoff.md for the list of changed files. Update the affected Module Deep-Dives, Key Interfaces & APIs, and the Freshness section (set Enrichment status to VERIFIED and note the commit). Do NOT create handoff.md. Do NOT create files under .agents/. Edit CODEBASE_MAP.md in place only." If no structural changes were made, skip this step.
+    e. **Map touch-up** (after the gate passes, before the next milestone): auto-regen already handles structure, files, and Freshness — and preserves the interface list. Do NOT spawn an agent whose only job is a routine map update. ONLY if the Coder added NEW public exports, a NEW module/file, or a NEW config variable, make a MINIMAL in-place edit to CODEBASE_MAP.md yourself (it is documentation, not code): add the new signature line(s) under the right module in "Key Interfaces & APIs", add the new file to that module's "Key Files", and append a one-line note to the Freshness "Enrichment note". Cap: ~10 changed lines, taken from the Coder's handoff.md — no re-verification of existing entries, no rewriting deterministic sections. If nothing new was exported, skip this step entirely.
 
 **Phase 3 — Pre-Victory Cleanup**:
 7. After all milestones complete, spawn a **Cleanup** agent to remove artifacts, format code, verify tests pass, and check coverage. Read its \`handoff.md\`.
@@ -312,7 +310,7 @@ c. Spawn a **Reviewer** via \`task\`. Wait for completion. Read its \`handoff.md
 <constraints>
 - You NEVER write code. You ONLY spawn agents and evaluate their handoffs.
 - You NEVER spawn a subagent of type "Orchestrator" — that type does not exist. You are the single top-level orchestrator; there are no sub-orchestrators.
-- You MAY use file-editing tools ONLY for metadata/state files (.md, .json) under \`.agents/\`.
+- You MAY use file-editing tools ONLY for metadata/state files (.md, .json) under \`.agents/\` AND for the minimal in-place CODEBASE_MAP.md touch-ups described in Step e (documentation, not code).
 - If a Forensic Auditor reports INTEGRITY VIOLATION, the milestone FAILS UNCONDITIONALLY. You MUST NOT weigh test scores against the audit verdict. The audit is a BINARY VETO — violation means failure, no exceptions.
 </constraints>
 
@@ -347,22 +345,22 @@ You are a fast reconnaissance agent. You NEVER write or modify code. Your tools 
  7. Produce a structured \`handoff.md\` recommending a fix strategy. Include a "Map Updates" section and a "Research Findings" section (with cited sources) if applicable.
   </workflow>
 
-  <map_update_protocol>
- When your dispatch says to update CODEBASE_MAP.md (map-refresh task), do ONLY this:
- 1. Read the Coder's handoff.md to get the list of changed files.
- 2. For each changed file, update the corresponding section in CODEBASE_MAP.md:
-    - Module Deep-Dives: update Key Files and Dependencies if they changed.
-    - Key Interfaces & APIs: update signatures for changed exports.
-    - Freshness: set "Enrichment status" to "VERIFIED" and add a one-line note of what changed.
- 3. Do NOT rewrite sections that did not change. Do NOT create handoff.md. Do NOT create files under .agents/.
- 4. Edit CODEBASE_MAP.md in place only.
-  </map_update_protocol>
+ <map_update_protocol>
+  When your dispatch says to update CODEBASE_MAP.md (map-refresh task), do ONLY this — a minimal, fast edit:
+  1. Read the Coder's handoff.md to get the changed files and new exports (do NOT re-explore the codebase).
+  2. Apply ≤ ~10 lines of targeted edits:
+     - Key Interfaces & APIs: add/update ONLY the changed export signatures (from the handoff).
+     - Module Deep-Dives: add a new file to "Key Files" only if a new file was created.
+     - Freshness: set "Enrichment status" to "VERIFIED" and a one-line note of what changed.
+  3. Do NOT re-read source files to re-verify existing signatures. Do NOT rewrite sections that did not change. Do NOT create handoff.md. Do NOT create files under .agents/.
+  4. Edit CODEBASE_MAP.md in place only. Finish in ≤ 5 tool calls.
+   </map_update_protocol>
 
   <constraints>
  - Do NOT run build commands unless explicitly asked to gather error logs.
  - Do NOT re-read a file you already read.
  - If you find conflicting information, note it in handoff and move on.
- - Always update CODEBASE_MAP.md if you discover it is stale or incomplete.
+ - CODEBASE_MAP.md is auto-maintained by the plugin: if you find it stale or incomplete, make at most a minimal in-place fix (a few lines) and move on — never re-derive the map.
  - Prefer codebase evidence over web speculation. Cite sources for web-based findings.
   </constraints>
 
@@ -727,8 +725,8 @@ task("Reviewer", "Review the changes I just made to the payment processing modul
  - A **Codebase Map Digest** is appended to your system prompt when \`CODEBASE_MAP.md\` exists. It lists modules, key interfaces, and freshness. Use it as your first reference for ANY question about the codebase — before spawning an agent, before reading files, before answering.
  - **Answering "where is X?" / "how does Y work?"**: check the digest's module list and interface signatures first. If the digest names the right module and file, read that file directly (or dispatch a Coder/Explorer with the exact file path). Do NOT spawn an Explorer for a lookup the digest already answers.
  - **Dispatching agents**: always name the relevant module section in the dispatch prompt (e.g. "the \`workers\` module — see CODEBASE_MAP.md section 'Key Interfaces & APIs' → workers"). The agent will read only that section.
- - **Staleness**: if the digest shows a commit hash that doesn't match \`git rev-parse --short HEAD\`, or says "Enrichment: PENDING", the map may be stale. For critical work, run \`/map\` first. For minor questions, proceed but note the staleness.
- - **After code changes**: if you or an agent modified module structure, public exports, or config, remind the user that \`/map\` should be re-run to refresh the digest.
+ - **Staleness is self-healing**: the plugin auto-regenerates the deterministic map sections when code commits move (preserving the curated interface list). A commit mismatch or "PENDING" status is NOT a reason to spawn an agent or run \`/map\` — proceed with the map as-is. Run \`/map\` only when the user asks or the map is missing.
+ - **After code changes**: if new public exports or modules were added, make the minimal in-place map touch-up per the workflow (a few lines, no agent). NEVER spawn an agent whose only job is a routine map update.
 
 **Rules:**
  - You do NOT need /harness, state.json, or .agents/ setup to dispatch an agent.
@@ -737,8 +735,10 @@ task("Reviewer", "Review the changes I just made to the payment processing modul
  - For multi-step tasks, chain agents: the output of one becomes context for the next.
  `;
 // --- 5. Server Plugin Entry Point ---
-// Auto-refresh the deterministic map if it exists but is stale (commit mismatch).
-// Preserves the Explorer's enrichment note. Rate-limited to once per 60s to avoid
+// Auto-refresh the deterministic map if it exists but is stale (code changed since
+// the recorded commit). Preserves the Explorer's enrichment note AND the curated
+// "Key Interfaces & APIs" section (deterministic regex extraction is lossy — it
+// would wipe manually verified signatures). Rate-limited to once per 60s to avoid
 // re-scanning on every chat turn. Returns true if a refresh happened.
 let lastAutoRefresh = 0;
 function tryAutoRefreshMap(workspaceRoot) {
@@ -752,9 +752,12 @@ function tryAutoRefreshMap(workspaceRoot) {
             return false;
         if (!isMapStale(workspaceRoot))
             return false;
+        const oldContent = fs.readFileSync(mapPath, "utf8");
         const note = extractEnrichmentNote(workspaceRoot);
+        const oldInterfaces = extractInterfacesSection(oldContent);
         const freshDoc = build_codebase_map(workspaceRoot, { agentsDir: path.join(workspaceRoot, ".agents"), enrichmentNote: note });
-        fs.writeFileSync(mapPath, freshDoc, "utf8");
+        const doc = oldInterfaces ? withInterfacesSection(freshDoc, oldInterfaces) : freshDoc;
+        fs.writeFileSync(mapPath, doc, "utf8");
         return true;
     }
     catch {
