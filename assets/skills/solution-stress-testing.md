@@ -28,7 +28,7 @@ A solution is not correct until it has survived attempts to break it. The goal i
 2. Generate random inputs within the valid domain.
 3. Run both the solution and the oracle on the same input.
 4. Any mismatch is a bug. Use the mismatching input to debug.
-5. Run at least 1000 random cases. If clean, increase the domain extremes and repeat.
+5. Run ONE bounded batch of random cases (50–500, whichever is cheap for the oracle). If clean, stop — do NOT scale the batch up or repeat passes indefinitely. Note the case count in the verdict.
 
 ### Phase 4: Verdict
 - **PASS**: all generated cases match the oracle (or match the expected output), no counterexample found.
@@ -40,13 +40,13 @@ A solution is not correct until it has survived attempts to break it. The goal i
 |--------------|--------------|------------|
 | Testing only the happy path | Misses the edge cases where bugs hide | Always include degenerate and boundary inputs |
 | Reusing the solution's own logic in the test | The test inherits the solution's bugs | The oracle must be independently correct |
-| Stopping after the first pass | One pass is not proof | Scale the random case count; widen the domain |
+| Unbounded scaling | A second full pass rarely adds value and burns the time budget | Cap the total case count; report the cap in the verdict |
 | Vague failure reports | "It failed" is not actionable | Record the exact input, expected, and actual output |
 
 ## Verification Checklist
 
 - [ ] Every input boundary was tested.
 - [ ] Degenerate inputs (empty, single, all-same) were tested.
-- [ ] At least 1000 random differential cases were run (if an oracle exists).
+- [ ] A bounded batch of random differential cases was run (if an oracle exists), and the count is recorded.
 - [ ] Every assumption in the solution was attacked.
 - [ ] The verdict is PASS or FAIL with concrete evidence.

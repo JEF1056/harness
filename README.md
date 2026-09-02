@@ -6,11 +6,11 @@ Listed in [awesome-opencode](https://github.com/awesome-opencode/awesome-opencod
 
 ## Features
 
-- **Flat hierarchy**: Orchestrator spawns ALL subagents directly — subagent depth never exceeds 1
+- **Single top-level Orchestrator**: the Orchestrator runs on the main thread and spawns ALL subagents directly — no sub-orchestrators, subagent depth never exceeds 1
 - **Swarm Gate pipeline**: Diamond workflow with Explorer → Coder → Reviewer/Challenger phases
 - **Integrity modes**: Development, demo, and benchmark modes with escalating anti-cheating enforcement
 - **Escalation ladder**: Retry → Replace → Skip → Redistribute → Degrade for stalled agents
-- **Succession protocol**: At 8+ spawns, the Orchestrator delegates to a fresh subagent to avoid context bloat
+- **Bounded Challenger**: the Challenger runs under a hard tool-call/execution budget with a stop condition, so it verifies and moves on instead of spinning
 - **Handoff chain**: Each agent reads the previous agent's `handoff.md` before starting
 - **Real-time monitoring**: File watchers + heartbeat polling + TUI toast notifications
 - **Artifact-driven handoffs**: Structured 5-section `handoff.md` files with forensic verification
@@ -25,7 +25,7 @@ Harness runs a **9-agent swarm**. The Orchestrator (top-level dispatcher) spawns
 
 | Agent | Role |
 |---|---|
-| Orchestrator | Top-level dispatcher — runs on the main thread, spawns all subagents directly, runs the Swarm Gate loop, mode: `all`, defaultConcurrency: 5, granted `ask_question` tool |
+| Orchestrator | Top-level dispatcher — prompt-injected into the main thread by `/harness`, spawns all subagents directly, runs the Swarm Gate loop. NOT a spawnable agent type (no sub-orchestrators) |
 | Explorer | Read-only scout — maps codebase architecture AND external research, mode: `subagent` |
 | Coder | Armed worker — implements changes, verifies builds, mode: `subagent` |
 | Reviewer | Adversarial code reviewer + integrity gate — checks correctness, quality, and anti-cheating, mode: `subagent` |
@@ -63,7 +63,7 @@ The Orchestrator runs the Swarm Gate Loop directly for each milestone:
 
 - Explorer handles both codebase mapping and external research in one pass
 - Reviewer handles correctness, quality, AND integrity scanning in one pass
-- Challenger writes and runs adversarial stress tests
+- Challenger writes and runs adversarial stress tests under a hard budget (max 20 tool calls, max 3 test executions, stop condition on clean verdict)
 - Auditor (separate) only for high-stakes: benchmark/production integrity modes
 - INTEGRITY VIOLATION unconditionally fails the milestone
 - Dual Track Architecture for greenfield projects: Implementation Track then E2E Testing Track
@@ -76,10 +76,6 @@ The Orchestrator runs the Swarm Gate Loop directly for each milestone:
 | development | Standard review, no special constraints | Default for everyday work |
 | demo | Moderate — no copying from open source, no pre-built libraries for core logic | Capability showcases |
 | benchmark | Maximum — no external scripts, no reading test source, no pre-built libraries | Competitive evals |
-
-### Succession Protocol
-
-At 8+ spawns, the Orchestrator delegates remaining work to a fresh subagent to avoid context bloat. The successor receives the full session state via `state.json` and `handoff.md` files.
 
 ### Real-Time Monitoring
 
@@ -131,7 +127,7 @@ The plugin creates the following files automatically:
 |---|---|---|
 | `ORIGINAL_REQUEST.md` | Workspace root | Records the user's raw objective |
 | `prompt_draft.md` | Workspace root | Orchestrator-compiled prompt (deleted and recreated per run) |
-| `state.json` | `.agents/` | Swarm state (`status`, `objective`, `integrityMode`, `spawnCount` fields) |
+| `state.json` | `.agents/` | Swarm state (`status`, `objective`, `integrityMode` fields) |
 | `.warned` | `.agents/` | Deduplication set for heartbeat warnings |
 | `BRIEFING.md` | Each agent folder | Append-only identity, constraints, and workflow |
 | `progress.md` | Each agent folder | Heartbeat (`Last visited` timestamp) and status |

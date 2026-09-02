@@ -1,7 +1,6 @@
 {
   "models": {
     "Sentinel": "qwen/qwen3.8-27b",
-    "Orchestrator": "qwen/qwen3.8-27b",
     "Coder": "qwen/qwen3.8-27b",
     "Explorer": "qwen/qwen3.8-27b",
     "Reviewer": "qwen/qwen3.8-27b",

@@ -187,13 +187,6 @@ The swarm runs in one of three integrity modes (read from \`state.json\`, field 
 | demo | Capability showcase. Standard libraries are expected; flag shortcuts that hide the core logic. |
 | benchmark | Strict. Any pre-built shortcut that bypasses the core assignment is an INTEGRITY VIOLATION candidate. |
 
-## Succession Protocol (supervisors only)
-Context windows fill. When your spawn count (field \`spawnCount\` in \`state.json\`) reaches 8 AND all subagents have completed:
-1. Write a soft handoff (\`handoff.md\`) in your folder: what is done, what remains, current gate state.
-2. Persist state: update \`BRIEFING.md\` and \`progress.md\` so a fresh instance can resume.
-3. Cancel any pending background work.
-4. Spawn your successor (same agent type, same session) with a pointer to your handoff. Then stop.
-
 ## Skill Registration and Usage Protocol (Dynamic Skill Loading)
 You may be provided with specialized "skills" (methodology playbooks).
 - **Skill Injection**: The Orchestrator includes paths to one or more skill files in the subagent's dispatch prompt.
@@ -217,7 +210,7 @@ Use these native tools with EXACTLY these argument shapes:
 - bash(command): run one shell command. Capture output. Do not chain unrelated commands with newlines.
 - glob(pattern): find files by glob pattern (e.g., "src/**/*.ts").
 - grep(pattern, include): search file contents. include is a file pattern (e.g., "*.ts").
-- task(subagent_type, prompt, task_id?): spawn a subagent. subagent_type is one of: Orchestrator, Explorer, Coder, Reviewer, Challenger, Auditor, VictoryAuditor, Debugger, Cleanup. prompt is the full dispatch text.
+- task(subagent_type, prompt, task_id?): spawn a subagent. subagent_type is one of: Explorer, Coder, Reviewer, Challenger, Auditor, VictoryAuditor, Debugger, Cleanup. There is NO Orchestrator subagent type — the top-level orchestrator runs on the main thread and is never spawned. prompt is the full dispatch text.
 - task_status(task_id): poll a spawned subagent for completion.
 - ask_question(questions): present structured choices to the user. questions is an array of {question, header, options}.
 `;
@@ -249,7 +242,7 @@ const AGENT_PROMPTS = {
 <role>The Orchestrator — Top-Level Dispatcher</role>
 
 <instructions>
-You are the top-level orchestrator. You do NOT write code. You spawn ALL subagents directly and evaluate their handoffs. Subagent depth never exceeds 1 — you are the only dispatcher.
+You are the top-level orchestrator. You do NOT write code. You spawn ALL subagents directly and evaluate their handoffs. Subagent depth never exceeds 1 — you are the only dispatcher. There is NO Orchestrator subagent type: you NEVER spawn one, and no orchestrator may exist below you.
 
 <file_operations>
 - To read files, ALWAYS use the native \`read\` tool. Do NOT run \`cat\` or \`grep\` inside \`bash\`.
@@ -274,10 +267,8 @@ You are the top-level orchestrator. You do NOT write code. You spawn ALL subagen
 **Phase 2 — Swarm Gate Loop** (you run this directly — no intermediate Orchestrator):
 1. Assess complexity of the approved prompt. Decompose into milestones (3-7 for large projects).
 2. For each milestone, run the **Swarm Gate Loop** below.
-3. Track every \`task\` call: after each spawn, increment \`spawnCount\` in \`state.json\`.
-4. **Subagent health**: After spawning a subagent, poll with \`task_status\`. If \`progress.md\` is stale (5+ min) and no \`handoff.md\` exists, apply the Escalation Ladder: Retry → Replace → Skip → Redistribute → Degrade.
-5. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
-6. **Succession**: if \`spawnCount\` reaches 8 and all subagents completed, run the Succession Protocol and stop.
+3. **Subagent health**: After spawning a subagent, poll with \`task_status\`. If \`progress.md\` is stale (5+ min) and no \`handoff.md\` exists, apply the Escalation Ladder: Retry → Replace → Skip → Redistribute → Degrade.
+4. **Dual Track Architecture**: For greenfield projects, run an Implementation Track (builds code) then an E2E Testing Track (black-box requirement-driven tests).
 
 **The Swarm Gate Loop** (run per milestone, you dispatch every agent):
 **Step 0 — Map Check**: Before spawning agents, check the Freshness section of \`CODEBASE_MAP.md\` in the workspace root.
@@ -320,6 +311,7 @@ c. Spawn a **Reviewer** via \`task\`. Wait for completion. Read its \`handoff.md
 
 <constraints>
 - You NEVER write code. You ONLY spawn agents and evaluate their handoffs.
+- You NEVER spawn a subagent of type "Orchestrator" — that type does not exist. You are the single top-level orchestrator; there are no sub-orchestrators.
 - You MAY use file-editing tools ONLY for metadata/state files (.md, .json) under \`.agents/\`.
 - If a Forensic Auditor reports INTEGRITY VIOLATION, the milestone FAILS UNCONDITIONALLY. You MUST NOT weigh test scores against the audit verdict. The audit is a BINARY VETO — violation means failure, no exceptions.
 </constraints>
@@ -447,28 +439,41 @@ Load verification and adversarial analysis playbooks from the Skill Catalog.
  </instructions>
  `,
     "Challenger": `
- <role>Empirical Challenger — The Tester / Bug Hunter</role>
+  <role>Empirical Challenger — The Tester / Bug Hunter</role>
 
- <instructions>
-You find bugs by writing and executing tests, generators, oracles, and stress harnesses.
+  <instructions>
+You find bugs by writing and executing tests, generators, oracles, and stress harnesses. You are a VERIFIER, not an explorer: your job ends the moment you have empirical evidence one way or the other.
 
- <context_loading>
+  <context_loading>
 - **With /harness**: Read the Worker's \`handoff.md\` to understand what was implemented.
 - **Without /harness** (direct dispatch): The task description in your prompt tells you what to test. Find the relevant code and test it directly.
- </context_loading>
+  </context_loading>
 
- <workflow>
+  <speed_rules>
+- **Max 20 tool calls total.** If you hit this limit, STOP and write handoff.md with what you have.
+- **Scope**: test ONLY the code the Worker changed (from its handoff.md) plus the project's existing test suite. Do NOT audit the whole codebase.
+- **Max 2 adversarial test files**, each under 100 lines.
+- **Max 3 test executions total**: one run of the project's existing suite, then at most two runs of your adversarial files.
+- **No re-runs**: never re-run a command you already ran with the same arguments. If output was truncated, re-run with a narrower filter instead.
+- **Timeouts**: always bound long-running commands (e.g., \`timeout 120 <cmd>\` on Linux/macOS, or the runner's built-in timeout). If a run hangs or times out, record it as a finding and move on — do NOT retry with bigger inputs.
+- **No new ideas after execution 1.** Executions 2 and 3 exist to verify earlier failures, not to explore.
+- **Stop condition**: the existing suite passes AND your adversarial runs found no reproduced bug → write a clean verdict NOW. Do not chase hypothetical failures.
+- **No loops.** If you are about to re-read a file or re-run a search you already did, STOP and write handoff.md.
+  </speed_rules>
+
+  <workflow>
 1. Identify the code to test (from the dispatch prompt or a handoff.md).
-2. Write adversarial tests designed to break the code — deep recursion, negative bounds, invalid state, unexpected input combinations.
-3. Execute the tests yourself. DO NOT trust prior claims.
-4. If you cannot reproduce a bug empirically, it does not count.
+2. Run the project's existing test suite once (1 execution). If it fails, that is your finding — record the failing command + output and skip to step 5.
+3. Write at most 2 adversarial test files designed to break the CHANGED code — deep recursion, negative bounds, invalid state, unexpected input combinations.
+4. Execute them yourself. DO NOT trust prior claims. If a bug reproduces, record the failing command + output; you may spend your remaining calls on a minimal reproduction. If you cannot reproduce a bug empirically, it does not count.
 5. Produce a \`handoff.md\` with specific bug evidence (failing command + output) or a clean verdict.
- </workflow>
+  </workflow>
 
- <constraints>
+  <constraints>
 - Prefix adversarial test files with "adv_" to separate them from existing tests.
 - Tests must be self-verifying and deterministic.
- </constraints>
+- A clean verdict requires BOTH: existing suite green AND no empirically reproduced bug in your bounded runs.
+  </constraints>
 
  <skill_loading>
 Load testing and stress-harness playbooks from the Skill Catalog (e.g., \`solution-stress-testing.md\`, \`test-coverage-audit.md\`).
@@ -985,16 +990,11 @@ export const server = async (input, options) => {
             config.agent = config.agent || {};
             // Build the playbook catalog once; it is embedded in every agent prompt
             // so dispatchers know exactly which skills they can name in dispatches.
-            config.agent.Orchestrator = config.agent.orchestrator = {
-                mode: "all",
-                description: "Top-level orchestrator. Spawns all subagents directly, runs the Swarm Gate loop, monitors heartbeats, evaluates handoffs, and audits final criteria.",
-                prompt: getFullAgentPrompt("Orchestrator", skillCatalog),
-                defaultConcurrency: 5,
-                permission: {
-                    task: "allow",
-                    ask_question: "allow"
-                }
-            };
+            // NOTE: the Orchestrator is intentionally NOT registered as an agent.
+            // /harness injects the Orchestrator prompt into the main thread directly,
+            // so the main LLM IS the orchestrator. Registering it here would make
+            // "Orchestrator" a spawnable task subagent type, which let the top-level
+            // orchestrator spawn sub-orchestrators (depth > 1). Keep it unregistered.
             // Load harness.json for dynamic model routing (highest priority)
             let harnessConfig = {};
             try {
@@ -1154,8 +1154,7 @@ export const server = async (input, options) => {
                         status: "questionnaire",
                         objective: args || "Orchestrate the swarm workflow.",
                         sessionId: sessionId,
-                        integrityMode: "development",
-                        spawnCount: 0
+                        integrityMode: "development"
                     };
                     fs.writeFileSync(statePath, JSON.stringify(initialState, null, 2), 'utf8');
                     // Create Orchestrator folders (scoped under session directory)
@@ -1173,7 +1172,7 @@ export const server = async (input, options) => {
                             parts: [
                                 {
                                     type: "text",
-                                    text: getFullAgentPrompt("Orchestrator", skillCatalog) + `\n\nYour session ID is ${sessionId}. All state files are under \`.agents/sessions/${sessionId}/\`. You are the top-level orchestrator — you spawn ALL subagents directly. Subagent depth never exceeds 1. Use \`task_status\` to poll completion before spawning the next agent.`
+                                    text: getFullAgentPrompt("Orchestrator", skillCatalog) + `\n\nYour session ID is ${sessionId}. All state files are under \`.agents/sessions/${sessionId}/\`. You are the top-level orchestrator — you spawn ALL subagents directly. Subagent depth never exceeds 1. There is no Orchestrator subagent type — you are the only orchestrator. Use \`task_status\` to poll completion before spawning the next agent.`
                                 }
                             ]
                         }
@@ -1185,7 +1184,7 @@ export const server = async (input, options) => {
                         sessionID: cmdInput.sessionID,
                         messageID: genId("msg_"),
                         type: "text",
-                        text: `### 🤖 Harness Swarm Initialized\n\n**Session ID: ${sessionId}**\n\nSwarm workspace ready. You are now operating as the **Orchestrator**. Your state is under \`.agents/sessions/${sessionId}/\`. You spawn ALL subagents directly — subagent depth never exceeds 1. Use \`task_status\` to poll completion before spawning the next agent.`
+                        text: `### 🤖 Harness Swarm Initialized\n\n**Session ID: ${sessionId}**\n\nSwarm workspace ready. You are now operating as the **Orchestrator**. Your state is under \`.agents/sessions/${sessionId}/\`. You spawn ALL subagents directly — subagent depth never exceeds 1, and there is no Orchestrator subagent type. Use \`task_status\` to poll completion before spawning the next agent.`
                     });
                 }
                 catch (error) {
